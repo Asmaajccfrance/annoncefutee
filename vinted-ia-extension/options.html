@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Annonce IA pour Vinted – Réglages</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 32px 16px; background: #f5f5f3; color: #171717;
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 560px; margin: 0 auto; background: #fff; border: 1px solid #dedede; border-radius: 12px; padding: 24px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #666; margin: 28px 0 0; padding-top: 18px; border-top: 1px solid #ececec; }
+    p.intro { margin: 0 0 4px; color: #555; }
+    label { display: block; font-weight: 600; margin: 16px 0 4px; }
+    label.case { display: flex; align-items: flex-start; gap: 8px; font-weight: 400; }
+    label.case input { margin-top: 4px; }
+    .aide { font-size: 13px; color: #666; margin: 0 0 6px; }
+    input[type="password"], input[type="text"], input[type="number"], select, textarea {
+      width: 100%; padding: 9px 10px; border: 1px solid #c4c4c4; border-radius: 8px; font: inherit; background: #fff; color: #171717;
+    }
+    textarea { min-height: 64px; resize: vertical; }
+    .deux { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .deux label { margin-top: 16px; }
+    .boutons { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+    button { font: inherit; padding: 9px 16px; border-radius: 8px; cursor: pointer; }
+    button#enregistrer { background: #007782; color: #fff; border: 0; font-weight: 600; }
+    button#tester { background: #fff; color: #171717; border: 1px solid #c4c4c4; }
+    #message { margin-top: 14px; min-height: 22px; font-size: 14px; }
+    #message.ok { color: #17643a; }
+    #message.erreur { color: #b3261e; }
+    ol { padding-left: 20px; margin: 10px 0 0; color: #444; font-size: 14px; }
+    @media (max-width: 480px) { .deux { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Annonce IA pour Vinted</h1>
+    <p class="intro">Ces réglages restent sur cet ordinateur. Tes identifiants Vinted ne sont jamais demandés.</p>
+
+    <label for="apiKey">Clé API Claude</label>
+    <p class="aide">Elle commence par « sk-ant- ». Elle sert uniquement à envoyer tes photos à l'IA pour rédiger l'annonce.</p>
+    <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
+
+    <label for="model">Modèle</label>
+    <p class="aide">Le plus rapide suffit pour la plupart des articles. Les autres sont plus précis mais plus lents et plus chers.</p>
+    <select id="model">
+      <option value="claude-haiku-5-5">Rapide et économique (Haiku)</option>
+      <option value="claude-sonnet-5-5">Équilibré (Sonnet)</option>
+      <option value="claude-opus-5-5">Le plus précis (Opus)</option>
+    </select>
+
+    <h2>Description</h2>
+
+    <label for="style">Longueur</label>
+    <select id="style">
+      <option value="court">Courte (2 lignes)</option>
+      <option value="normal">Normale (3 à 6 lignes)</option>
+      <option value="detaille">Détaillée (6 à 10 lignes)</option>
+    </select>
+
+    <label class="case" for="hashtags">
+      <input id="hashtags" type="checkbox">
+      <span>Ajouter des hashtags à la fin de la description</span>
+    </label>
+
+    <label for="signature">Phrase ajoutée à chaque description (facultatif)</label>
+    <p class="aide">Par exemple : « Envoi rapide et soigné, maison non-fumeur. »</p>
+    <textarea id="signature" maxlength="300"></textarea>
+
+    <h2>Prix</h2>
+    <p class="aide" style="margin-top:10px">L'IA propose une estimation. Ta règle s'applique ensuite, avant que le prix soit écrit dans Vinted.</p>
+    <div class="deux">
+      <div>
+        <label for="prixAjustement">Ajustement en %</label>
+        <input id="prixAjustement" type="number" min="-90" max="100" step="1" placeholder="0">
+        <p class="aide" style="margin-top:4px">-10 pour retirer 10 %, 0 pour ne rien changer.</p>
+      </div>
+      <div>
+        <label for="prixArrondi">Arrondi</label>
+        <select id="prixArrondi">
+          <option value="1">À l'euro</option>
+          <option value="5">Au multiple de 5 €</option>
+        </select>
+      </div>
+    </div>
+
+    <h2>Vitesse</h2>
+    <label class="case" for="autoGenerer">
+      <input id="autoGenerer" type="checkbox">
+      <span>Générer l'annonce automatiquement dès que les photos sont ajoutées<br>
+        <span class="aide">Une seule fois par nouvelle annonce, quelques secondes après la dernière photo. Chaque génération consomme un peu de ton crédit IA. Rien n'est publié sans ton clic.</span>
+      </span>
+    </label>
+
+    <div class="boutons">
+      <button id="enregistrer" type="button">Enregistrer</button>
+      <button id="tester" type="button">Tester la clé</button>
+    </div>
+    <div id="message" role="status"></div>
+
+    <h2>Utilisation</h2>
+    <ol>
+      <li>Ouvre vinted.fr et clique sur « Vendre un article ».</li>
+      <li>Ajoute tes photos dans le formulaire, comme d'habitude.</li>
+      <li>Clique sur « Générer avec l'IA » en bas à droite (inutile si la génération automatique est activée).</li>
+      <li>Vérifie l'annonce, complète ce qui est marqué « à choisir », puis publie.</li>
+    </ol>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

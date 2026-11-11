@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Annonce IA pour Vinted",
+  "version": "1.2.0",
+  "description": "Génère le titre, la description et le prix d'une annonce Vinted à partir des photos déjà ajoutées. Tu vérifies et tu publies toi-même.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://api.anthropic.com/*",
+    "https://*.vinted.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.vinted.fr/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Annonce IA pour Vinted – Réglages"
+  }
+}
