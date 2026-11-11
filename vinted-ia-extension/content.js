@@ -4,10 +4,14 @@
 
 (() => {
   if (window.__annonceIA) return;
+  const IA = globalThis.VintedIA;
+  if (!IA) return;
 
-  const MAX_PHOTOS = 5;
+  const MAX_PHOTOS = IA.MAX_PHOTOS;
   const COTE_MAX = 1024;
   const fichiersAjoutes = [];
+  const formaterPrix = IA.formaterPrix;
+  const normaliser = IA.normaliser;
 
   // ---------- Page concernée ----------
 
@@ -23,6 +27,9 @@
     if (!fichiers || !estPageVente()) return;
     for (const f of fichiers) {
       if (f && f.type && f.type.startsWith('image/')) fichiersAjoutes.push(f);
+    }
+    if (fichiersAjoutes.length > MAX_PHOTOS * 4) {
+      fichiersAjoutes.splice(0, fichiersAjoutes.length - MAX_PHOTOS);
     }
   }
   document.addEventListener(
@@ -64,7 +71,7 @@
     // 2. Photos déjà enregistrées (modification d'une annonce existante).
     const distantes = unique(
       imgs.filter((img) => {
-        if (!/^https:/.test(img.src)) return false;
+        if (!IA.hoteImageAutorise(img.src)) return false;
         const r = img.getBoundingClientRect();
         return r.width >= 80 && r.height >= 80;
       })
@@ -144,24 +151,10 @@
   }
 
   const CHAMPS = {
-    titre: () =>
-      chercherChamp(
-        ['[data-testid="title--input"]', 'input[name="title"]', 'input#title'],
-        'input[type="text"], input:not([type])',
-        /titre|title/
-      ),
+    titre: () => chercherChamp(IA.CHAMPS.titre.selecteurs, IA.CHAMPS.titre.balises, IA.CHAMPS.titre.motif),
     description: () =>
-      chercherChamp(
-        ['[data-testid="description--input"]', 'textarea[name="description"]', 'textarea#description'],
-        'textarea',
-        /d[ée]cri|description/
-      ),
-    prix: () =>
-      chercherChamp(
-        ['[data-testid="price-input--input"]', 'input[name="price"]', 'input#price'],
-        'input',
-        /prix|price/
-      )
+      chercherChamp(IA.CHAMPS.description.selecteurs, IA.CHAMPS.description.balises, IA.CHAMPS.description.motif),
+    prix: () => chercherChamp(IA.CHAMPS.prix.selecteurs, IA.CHAMPS.prix.balises, IA.CHAMPS.prix.motif)
   };
 
   // Vinted utilise React : il faut passer par le "setter" natif puis émettre
@@ -175,12 +168,6 @@
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.blur();
-  }
-
-  function formaterPrix(n) {
-    const v = Number(n);
-    if (!isFinite(v) || v <= 0) return '';
-    return String(Math.max(1, Math.round(v)));
   }
 
   function remplir(annonce) {
@@ -212,15 +199,6 @@
 
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  function normaliser(t) {
-    return (t || '')
-      .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
   function visible(el) {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
@@ -233,29 +211,7 @@
     el.click();
   }
 
-  const MENUS = {
-    etat: {
-      selecteurs: [
-        '[data-testid="status-select-dropdown-input"]',
-        '[data-testid="condition-select-dropdown-input"]',
-        'input[name="status"]',
-        'input#status_id'
-      ],
-      motif: /^etat( de l'article)?$/
-    },
-    couleurs: {
-      selecteurs: ['[data-testid="color-select-dropdown-input"]', 'input[name="color"]', 'input#color'],
-      motif: /^couleurs?( \(.*\))?$/
-    },
-    taille: {
-      selecteurs: ['[data-testid="size-select-dropdown-input"]', 'input[name="size"]', 'input#size_id'],
-      motif: /^tailles?( \(.*\))?$/
-    },
-    matiere: {
-      selecteurs: ['[data-testid="material-select-dropdown-input"]', 'input[name="material"]', 'input#material'],
-      motif: /^matieres?( \(.*\))?$/
-    }
-  };
+  const MENUS = IA.MENUS;
 
   function trouverMenu(def) {
     for (const s of def.selecteurs) {
@@ -394,7 +350,7 @@
   function creerInterface() {
     hote = document.createElement('div');
     hote.id = 'annonce-ia-hote';
-    racine = hote.attachShadow({ mode: 'open' });
+    racine = hote.attachShadow({ mode: 'closed' });
 
     const style = document.createElement('style');
     style.textContent = STYLE;
@@ -679,6 +635,9 @@
     etatAuto: () => ({ prefs, autoFait, nbPhotos })
   };
 
-  synchroniser();
-  setInterval(synchroniser, 800);
+  function planifier() {
+    synchroniser();
+    setTimeout(planifier, estPageVente() ? 800 : 2000);
+  }
+  planifier();
 })();
