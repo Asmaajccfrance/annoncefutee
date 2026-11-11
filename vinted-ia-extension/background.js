@@ -65,6 +65,9 @@ async function appelerApi(apiKey, corps, version) {
 
 async function generer(images, precisions) {
   const reglages = await lireReglages();
+  if (IA.choisirMoteur(reglages) === 'backend') {
+    return analyserViaBackend(reglages, images, precisions);
+  }
   const { apiKey, model, signature } = reglages;
   if (!apiKey) {
     const err = new Error('Ajoute ta clé API dans les réglages de l\'extension.');
@@ -120,6 +123,105 @@ async function generer(images, precisions) {
   annonce.prix_ia = annonce.prix_suggere;
   annonce.prix_suggere = IA.appliquerReglePrix(annonce.prix_suggere, reglages);
   return annonce;
+}
+
+async function lireJson(reponse) {
+  try {
+    return await reponse.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+function messageServeur(reponse, json) {
+  if (json && json.message) return String(json.message).replace(/\s+/g, ' ').trim().slice(0, 180);
+  return 'Le serveur n\'a pas pu rédiger l\'annonce (' + reponse.status + ').';
+}
+
+async function analyserViaBackend(reglages, images, precisions) {
+  const photos = IA.assainirImages(images);
+  const url = IA.urlApi(reglages.backendUrl, '/api/v1/listings/analyze');
+  let reponse;
+  try {
+    reponse = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+        authorization: 'Bearer ' + reglages.backendToken
+      },
+      body: JSON.stringify(IA.corpsAnalyse(photos, precisions, reglages))
+    });
+  } catch (e) {
+    throw new Error('Connexion impossible au serveur. Vérifie qu\'il est démarré.');
+  }
+  const json = await lireJson(reponse);
+  if (reponse.status === 401) {
+    await chrome.storage.local.set({ backendToken: '' });
+    const err = new Error('Session expirée. Reconnecte-toi dans les réglages.');
+    err.code = 'NO_KEY';
+    throw err;
+  }
+  if (!reponse.ok || !json || !json.data) throw new Error(messageServeur(reponse, json));
+  return IA.preparerAnnonceServeur(json.data, reglages);
+}
+
+async function connecterCompte(email, password, backendUrl) {
+  const url = IA.urlApi(backendUrl, '/api/v1/auth/login');
+  let reponse;
+  try {
+    reponse = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ email: email, password: password, device_name: 'chrome' })
+    });
+  } catch (e) {
+    throw new Error('Connexion impossible au serveur. Vérifie qu\'il est démarré.');
+  }
+  const json = await lireJson(reponse);
+  if (!reponse.ok || !json || !json.token) throw new Error(messageServeur(reponse, json));
+  const propre = IA.assainirReglages({ backendUrl: backendUrl, backendEmail: email, backendToken: json.token });
+  await chrome.storage.local.set({
+    backendUrl: propre.backendUrl,
+    backendEmail: propre.backendEmail,
+    backendToken: propre.backendToken
+  });
+  return { connected: true, email: propre.backendEmail, credits: json.credits || null, backendUrl: propre.backendUrl };
+}
+
+async function deconnecterCompte() {
+  const reglages = await lireReglages();
+  if (reglages.backendToken && reglages.backendUrl) {
+    try {
+      await fetch(IA.urlApi(reglages.backendUrl, '/api/v1/auth/logout'), {
+        method: 'POST',
+        headers: { accept: 'application/json', authorization: 'Bearer ' + reglages.backendToken }
+      });
+    } catch (e) {
+      /* le jeton local est effacé même si le serveur ne répond pas */
+    }
+  }
+  await chrome.storage.local.set({ backendToken: '', backendEmail: '' });
+  return { connected: false };
+}
+
+async function lireCompte() {
+  const reglages = await lireReglages();
+  if (IA.choisirMoteur(reglages) !== 'backend') return { connected: false, email: '' };
+  try {
+    const reponse = await fetch(IA.urlApi(reglages.backendUrl, '/api/v1/me'), {
+      headers: { accept: 'application/json', authorization: 'Bearer ' + reglages.backendToken }
+    });
+    const json = await lireJson(reponse);
+    if (reponse.status === 401) {
+      await chrome.storage.local.set({ backendToken: '' });
+      return { connected: false, email: '' };
+    }
+    if (!reponse.ok || !json || !json.user) return { connected: true, email: reglages.backendEmail, credits: null };
+    return { connected: true, email: json.user.email, credits: json.credits || null };
+  } catch (e) {
+    return { connected: true, email: reglages.backendEmail, credits: null, offline: true };
+  }
 }
 
 // Préférences non sensibles dont la page Vinted a besoin (jamais la clé).
@@ -180,6 +282,9 @@ chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
   if (msg.type === 'fetchImage') return traiter(recupererImage(msg.url));
   if (msg.type === 'getPrefs') return traiter(lirePreferences());
   if (msg.type === 'testKey') return traiter(testerCle(msg.apiKey, msg.model));
+  if (msg.type === 'authLogin') return traiter(connecterCompte(msg.email, msg.password, msg.backendUrl));
+  if (msg.type === 'authLogout') return traiter(deconnecterCompte());
+  if (msg.type === 'getAccount') return traiter(lireCompte());
   if (msg.type === 'openOptions') {
     chrome.runtime.openOptionsPage();
     return false;

@@ -484,6 +484,7 @@
     ajouterLigne('Taille', annonce.taille, menus.taille);
     ajouterLigne('Matière', annonce.matiere, menus.matiere);
     ajouterLigne('Catégorie', annonce.categorie);
+    ajouterLigne('Sous-catégorie', annonce.sous_categorie);
     ajouterLigne('Marque', annonce.marque);
 
     const note = document.createElement('div');

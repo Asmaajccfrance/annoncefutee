@@ -27,7 +27,8 @@
     .boutons { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
     button { font: inherit; padding: 9px 16px; border-radius: 8px; cursor: pointer; }
     button#enregistrer { background: #007782; color: #fff; border: 0; font-weight: 600; }
-    button#tester { background: #fff; color: #171717; border: 1px solid #c4c4c4; }
+    button#tester, button#connecter, button#deconnecter { background: #fff; color: #171717; border: 1px solid #c4c4c4; }
+    #compte { font-size: 14px; margin: 8px 0 0; color: #333; }
     #message { margin-top: 14px; min-height: 22px; font-size: 14px; }
     #message.ok { color: #17643a; }
     #message.erreur { color: #b3261e; }
@@ -40,6 +41,21 @@
     <h1>Annonce IA pour Vinted</h1>
     <p class="intro">Ces réglages restent sur cet ordinateur. Tes identifiants Vinted ne sont jamais demandés.</p>
 
+    <h2 style="margin-top:8px;border-top:0;padding-top:0">Compte</h2>
+    <p class="aide">Connecte-toi au serveur pour analyser les photos sans clé personnelle. La clé OpenAI reste sur le serveur. Sans session, la clé Claude ci-dessous continue de fonctionner. La session n'est envoyée qu'à ce serveur local, ou à l'adresse officielle intégrée à l'extension.</p>
+    <label for="backendUrl">Adresse du serveur</label>
+    <input id="backendUrl" type="url" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:8000">
+    <label for="email">E-mail</label>
+    <input id="email" type="email" autocomplete="username" spellcheck="false">
+    <label for="password">Mot de passe</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <p id="compte">Non connecté.</p>
+    <div class="boutons" style="margin-top:12px">
+      <button id="connecter" type="button">Se connecter</button>
+      <button id="deconnecter" type="button">Se déconnecter</button>
+    </div>
+
+    <h2>Clé Claude (transition)</h2>
     <label for="apiKey">Clé API Claude</label>
     <p class="aide">Elle commence par « sk-ant- ». Elle sert uniquement à envoyer tes photos à l'IA pour rédiger l'annonce.</p>
     <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">

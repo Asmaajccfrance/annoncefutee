@@ -10,6 +10,9 @@
   const MAX_PHOTOS = 5;
   const MAX_IMAGE_CHARS = 1500000;
   const MAX_PRECISIONS = 300;
+  // Origine HTTPS de production, exactement. Vide tant que le domaine n'est pas le nôtre :
+  // le jeton ne peut alors atteindre que le serveur local.
+  const API_OFFICIELLE = '';
 
   const ETATS = [
     'Neuf avec étiquette',
@@ -34,7 +37,10 @@
     hashtags: true,
     prixAjustement: 0,
     prixArrondi: 1,
-    autoGenerer: false
+    autoGenerer: false,
+    backendUrl: 'http://127.0.0.1:8000',
+    backendToken: '',
+    backendEmail: ''
   };
 
   const LONGUEURS = {
@@ -184,6 +190,7 @@
       titre: titre,
       description: description,
       categorie: chaine(brut.categorie, 200),
+      sous_categorie: chaine(brut.sous_categorie, 120),
       marque: chaine(brut.marque, 80),
       taille: chaine(brut.taille, 40),
       etat: ETATS.indexOf(brut.etat) >= 0 ? brut.etat : '',
@@ -207,8 +214,64 @@
       hashtags: r.hashtags === undefined ? true : !!r.hashtags,
       prixAjustement: pct,
       prixArrondi: Number(r.prixArrondi) === 5 ? 5 : 1,
-      autoGenerer: !!r.autoGenerer
+      autoGenerer: !!r.autoGenerer,
+      backendUrl: assainirUrlBackend(r.backendUrl),
+      backendToken: chaine(typeof r.backendToken === 'string' ? r.backendToken : '', 2000),
+      backendEmail: chaine(typeof r.backendEmail === 'string' ? r.backendEmail : '', 190)
     };
+  }
+
+  function origineAutorisee(origin) {
+    if (origin === 'http://127.0.0.1:8000' || origin === 'http://localhost:8000') return true;
+    return API_OFFICIELLE !== '' && origin === API_OFFICIELLE;
+  }
+
+  function urlApi(base, path) {
+    let u;
+    try {
+      u = new URL(base);
+    } catch (e) {
+      throw new Error('Adresse du serveur non autorisée.');
+    }
+    if (u.username || u.password || !origineAutorisee(u.origin)) {
+      throw new Error('Adresse du serveur non autorisée.');
+    }
+    return u.origin + (path.charAt(0) === '/' ? path : '/' + path);
+  }
+
+  function assainirUrlBackend(v) {
+    const s = chaine(typeof v === 'string' ? v : '', 200);
+    if (!s) return 'http://127.0.0.1:8000';
+    try {
+      return new URL(urlApi(s, '/')).origin;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function choisirMoteur(r) {
+    const reglages = r || {};
+    if (reglages.backendToken) return 'backend';
+    if (reglages.apiKey) return 'claude';
+    return 'none';
+  }
+
+  function corpsAnalyse(images, precisions, reglages) {
+    const r = reglages || {};
+    return {
+      images: images,
+      precisions: assainirPrecisions(precisions),
+      style: r.style === 'court' || r.style === 'detaille' ? r.style : 'normal',
+      hashtags: !!r.hashtags,
+      signature: chaine(typeof r.signature === 'string' ? r.signature : '', 300)
+    };
+  }
+
+  function preparerAnnonceServeur(data, reglages) {
+    const annonce = assainirAnnonce(data);
+    annonce.prix_ia = annonce.prix_suggere;
+    annonce.prix_suggere = appliquerReglePrix(annonce.prix_suggere, reglages || {});
+    return annonce;
   }
 
   // Haiku 5.5 accepte un outil forcé : la réponse commence par l'outil, sans réflexion.
@@ -315,13 +378,14 @@
         pageVinted = false;
       }
     }
-    if (type === 'testKey') return interne;
+    if (type === 'testKey' || type === 'authLogin' || type === 'authLogout' || type === 'getAccount') return interne;
     if (type === 'openOptions') return interne || pageVinted;
     if (type === 'generate' || type === 'fetchImage' || type === 'getPrefs') return pageVinted;
     return false;
   }
 
   return {
+    API_OFFICIELLE: API_OFFICIELLE,
     MODELE_DEFAUT: MODELE_DEFAUT,
     MODELES: MODELES,
     MAX_PHOTOS: MAX_PHOTOS,
@@ -339,6 +403,10 @@
     assainirImages: assainirImages,
     assainirAnnonce: assainirAnnonce,
     assainirReglages: assainirReglages,
+    choisirMoteur: choisirMoteur,
+    urlApi: urlApi,
+    corpsAnalyse: corpsAnalyse,
+    preparerAnnonceServeur: preparerAnnonceServeur,
     optionsAppel: optionsAppel,
     construireOutil: construireOutil,
     autoriserMessage: autoriserMessage

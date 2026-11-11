@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Annonce IA pour Vinted",
-  "version": "1.2.1",
+  "version": "1.3.1",
   "description": "Génère le titre, la description et le prix d'une annonce Vinted à partir des photos déjà ajoutées. Tu vérifies et tu publies toi-même.",
   "permissions": ["storage"],
   "host_permissions": [
@@ -9,7 +9,9 @@
     "https://*.vinted.net/*",
     "https://vinted.net/*",
     "https://*.vinted.fr/*",
-    "https://vinted.fr/*"
+    "https://vinted.fr/*",
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*"
   ],
   "background": {
     "service_worker": "background.js"

@@ -165,4 +165,55 @@ test('les messages ne sont acceptés que depuis la bonne origine', () => {
   assert.equal(IA.autoriserMessage('generate', piege, EXT), false);
   assert.equal(IA.autoriserMessage('generate', null, EXT), false);
   assert.equal(IA.autoriserMessage('voler', page, EXT), false);
+  assert.equal(IA.autoriserMessage('authLogin', options, EXT), true);
+  assert.equal(IA.autoriserMessage('authLogin', page, EXT), false);
+  assert.equal(IA.autoriserMessage('authLogout', options, EXT), true);
+  assert.equal(IA.autoriserMessage('getAccount', page, EXT), false);
+});
+
+test('une session serveur est prioritaire et ne transmet jamais la clé Claude', () => {
+  assert.equal(IA.choisirMoteur({ backendToken: 'jeton', apiKey: 'sk-ant-test' }), 'backend');
+  assert.equal(IA.choisirMoteur({ apiKey: 'sk-ant-test' }), 'claude');
+  assert.equal(IA.choisirMoteur({}), 'none');
+
+  const corps = IA.corpsAnalyse(['abcdabcdabcdabcd'], 'laine', {
+    apiKey: 'sk-ant-test',
+    style: 'court',
+    hashtags: false,
+    signature: 'Envoi soigné.'
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(corps, 'apiKey'), false);
+  assert.deepEqual(corps.images, ['abcdabcdabcdabcd']);
+  assert.equal(corps.style, 'court');
+  assert.equal(corps.hashtags, false);
+  assert.equal(JSON.stringify(corps).includes('sk-ant-test'), false);
+});
+
+test('seuls le serveur local et l\'adresse officielle peuvent recevoir la session', () => {
+  assert.equal(IA.API_OFFICIELLE, '');
+  assert.equal(
+    IA.urlApi('http://127.0.0.1:8000/autre', '/api/v1/listings/analyze'),
+    'http://127.0.0.1:8000/api/v1/listings/analyze'
+  );
+  assert.equal(IA.urlApi('http://localhost:8000', '/api/v1/me'), 'http://localhost:8000/api/v1/me');
+  assert.throws(() => IA.urlApi('https://api.exemple.fr/ignored', '/api/v1/me'), /non autorisée/);
+  assert.throws(() => IA.urlApi('https://api.exemple.fr.evil.com', '/api/v1/me'), /non autorisée/);
+  assert.throws(() => IA.urlApi('http://127.0.0.1:8001', '/api/v1/me'), /non autorisée/);
+  assert.throws(() => IA.urlApi('http://api.exemple.fr', '/api/v1/me'), /non autorisée/);
+  assert.throws(() => IA.urlApi('https://user:secret@127.0.0.1:8000', '/api/v1/me'), /non autorisée/);
+  assert.equal(IA.assainirReglages({ backendUrl: 'https://evil.example' }).backendUrl, '');
+  assert.equal(IA.choisirMoteur({ backendToken: 'jeton', backendUrl: 'https://evil.example', apiKey: 'sk-ant-test' }), 'backend');
+});
+
+test('la règle de prix locale s\'applique à la réponse du serveur', () => {
+  const annonce = IA.preparerAnnonceServeur({
+    titre: 'Pull noir',
+    description: 'Pull en laine, porté quelques fois.',
+    sous_categorie: 'Pulls',
+    prix_suggere: 18.2,
+    couleurs: ['Noir']
+  }, { prixAjustement: -10, prixArrondi: 1 });
+  assert.equal(annonce.prix_ia, 18.2);
+  assert.equal(annonce.prix_suggere, 16);
+  assert.equal(annonce.sous_categorie, 'Pulls');
 });
