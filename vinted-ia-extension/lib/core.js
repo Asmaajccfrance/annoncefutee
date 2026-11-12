@@ -392,6 +392,10 @@
     if (type === 'openOptions' || type === 'openSidePanel') return interne || pageVinted;
     if (type === 'generate' || type === 'fetchImage') return pageVinted || panneau;
     if (type === 'getPrefs') return pageVinted || panneau;
+    // Messages pour l'automatisation photos
+    if (type === 'photosChanged' || type === 'getPageInfo' || type === 'forceCheckPhotos') return pageVinted;
+    if (type === 'collectPhotos' || type === 'fillListing' || type === 'setAnalyseEnCours') return panneau || pageVinted;
+    if (type === 'photosDetected' || type === 'getPhotosState') return interne || panneau;
     return false;
   }
 

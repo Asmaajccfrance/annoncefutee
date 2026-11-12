@@ -274,6 +274,9 @@ async function recupererImage(url) {
   return 'data:' + (blob.type || 'image/jpeg') + ';base64,' + btoa(bin);
 }
 
+// Stocke le dernier état des photos pour le sidepanel
+let dernierEtatPhotos = { count: 0, hash: '', tabId: null, timestamp: 0 };
+
 chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
   if (!msg || !msg.type) return false;
   if (!IA.autoriserMessage(msg.type, sender, chrome.runtime.id)) return false;
@@ -302,6 +305,32 @@ chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
     const ouverture = tabId ? chrome.sidePanel.open({ tabId: tabId }) : chrome.sidePanel.open({});
     return traiter(ouverture.then(() => true));
   }
+  
+  // Notification de changement de photos depuis content.js
+  if (msg.type === 'photosChanged') {
+    const tabId = sender.tab && sender.tab.id;
+    dernierEtatPhotos = {
+      count: msg.count || 0,
+      hash: msg.hash || '',
+      tabId: tabId,
+      pageUrl: msg.pageUrl || '',
+      timestamp: msg.timestamp || Date.now()
+    };
+    // Notifier le sidepanel si ouvert
+    chrome.runtime.sendMessage({
+      type: 'photosDetected',
+      ...dernierEtatPhotos
+    }).catch(() => {});
+    repondre({ ok: true });
+    return true;
+  }
+  
+  // Le sidepanel demande l'état actuel des photos
+  if (msg.type === 'getPhotosState') {
+    repondre({ ok: true, data: dernierEtatPhotos });
+    return true;
+  }
+  
   return false;
 });
 

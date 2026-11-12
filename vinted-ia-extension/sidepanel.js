@@ -26,6 +26,13 @@
   // État des brouillons (persistant)
   let brouillons = [];
   
+  // État de l'automatisation
+  let autoGenerer = false;
+  let autoRemplir = true;
+  let dernierHashTraite = '';
+  let generationEnCours = false;
+  let dernierBrouillonGenere = null;
+  
   async function chargerBrouillons() {
     try {
       const data = await chrome.storage.local.get(['brouillons']);
@@ -787,12 +794,15 @@
     const data = await chrome.storage.local.get([
       'backendUrl', 'token', 'credits',
       'style', 'hashtags', 'signature',
-      'prixAjustement', 'prixArrondi', 'apiKey'
+      'prixAjustement', 'prixArrondi', 'apiKey',
+      'autoGenerer', 'autoRemplir'
     ]);
 
     backendUrl = data.backendUrl || '';
     token = data.token || null;
     credits = data.credits !== undefined ? data.credits : null;
+    autoGenerer = !!data.autoGenerer;
+    autoRemplir = data.autoRemplir !== false;
 
     $('#backendUrl').value = backendUrl;
     $('#style').value = data.style || 'normal';
@@ -801,6 +811,8 @@
     $('#prixAjustement').value = data.prixAjustement || 0;
     $('#prixArrondi').value = data.prixArrondi || 1;
     $('#apiKey').value = data.apiKey || '';
+    $('#autoGenerer').checked = autoGenerer;
+    $('#autoRemplir').checked = autoRemplir;
 
     majStatutCompte();
     majCreditsHeader();
@@ -911,6 +923,9 @@
   });
 
   $('#sauvegarder').addEventListener('click', async () => {
+    autoGenerer = $('#autoGenerer').checked;
+    autoRemplir = $('#autoRemplir').checked;
+    
     await chrome.storage.local.set({
       backendUrl: $('#backendUrl').value.trim().replace(/\/+$/, ''),
       style: $('#style').value,
@@ -918,9 +933,27 @@
       signature: $('#signature').value.trim(),
       prixAjustement: parseInt($('#prixAjustement').value, 10) || 0,
       prixArrondi: parseInt($('#prixArrondi').value, 10) || 1,
-      apiKey: $('#apiKey').value.trim()
+      apiKey: $('#apiKey').value.trim(),
+      autoGenerer: autoGenerer,
+      autoRemplir: autoRemplir
     });
     afficherStatut('Réglages enregistrés.', 'succes');
+  });
+
+  // Sauvegarder automatiquement les options d'automatisation
+  $('#autoGenerer').addEventListener('change', async () => {
+    autoGenerer = $('#autoGenerer').checked;
+    await chrome.storage.local.set({ autoGenerer });
+    if (autoGenerer) {
+      afficherStatut('Mode automatique activé.', 'succes');
+      // Vérifier immédiatement s'il y a des photos
+      verifierEtTraiterPhotos();
+    }
+  });
+
+  $('#autoRemplir').addEventListener('change', async () => {
+    autoRemplir = $('#autoRemplir').checked;
+    await chrome.storage.local.set({ autoRemplir });
   });
 
   // ========== IA ==========
@@ -1014,9 +1047,191 @@ Analyse les photos et génère une annonce complète au format JSON avec :
     })[c]);
   }
 
+  // ========== FLUX AUTOMATIQUE ==========
+  
+  // Écouter les notifications de photos détectées
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'photosDetected' && msg.count > 0) {
+      console.log('[AF] Photos détectées:', msg.count, 'hash:', msg.hash);
+      
+      // Mettre à jour l'affichage
+      if (sectionActive === 'dashboard') {
+        rafraichirDashboard();
+      }
+      
+      // Si mode auto activé et nouveau hash
+      if (autoGenerer && msg.hash && msg.hash !== dernierHashTraite) {
+        traiterPhotosAuto(msg);
+      }
+    }
+  });
+
+  async function verifierEtTraiterPhotos() {
+    if (generationEnCours) return;
+    
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tabs[0] || !tabs[0].url?.includes('vinted.')) return;
+      
+      const rep = await chrome.tabs.sendMessage(tabs[0].id, { type: 'getPageInfo' });
+      if (rep?.ok && rep.estPageVente && rep.photos > 0) {
+        if (rep.hash !== dernierHashTraite) {
+          traiterPhotosAuto({ count: rep.photos, hash: rep.hash, tabId: tabs[0].id });
+        }
+      }
+    } catch (e) {
+      console.warn('[AF] Erreur vérification photos:', e);
+    }
+  }
+
+  async function traiterPhotosAuto(msg) {
+    if (generationEnCours || !autoGenerer) return;
+    if (msg.hash === dernierHashTraite) return;
+    
+    // Vérifier qu'on a une session valide
+    if (!token && !backendUrl) {
+      const data = await chrome.storage.local.get(['apiKey']);
+      if (!data.apiKey) {
+        afficherStatut('Configure ton compte ou ta clé API dans Réglages.', 'erreur');
+        return;
+      }
+    }
+    
+    generationEnCours = true;
+    dernierHashTraite = msg.hash;
+    
+    try {
+      // Notifier le content script que l'analyse commence
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'setAnalyseEnCours', enCours: true }).catch(() => {});
+      }
+      
+      afficherStatut(`${msg.count} photo(s) détectée(s). Analyse en cours...`, 'info');
+      
+      // Récupérer les photos
+      const rep = await chrome.tabs.sendMessage(tabs[0].id, { type: 'collectPhotos' });
+      if (!rep?.ok || !rep.images?.length) {
+        throw new Error('Impossible de récupérer les photos.');
+      }
+
+      // Ajouter à la galerie
+      const album = creerAlbumSiBesoin();
+      rep.images.forEach((b64, i) => {
+        const dataUrl = b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64;
+        Studio.ajouterPhoto(album.id, dataUrl, 'vinted-' + (i + 1) + '.jpg');
+      });
+      rafraichirGalerie();
+
+      afficherStatut('Photos récupérées. Génération de l\'annonce...', 'info');
+      
+      // Générer l'annonce
+      const annonce = await analyserAvecIA(rep.images, '');
+      
+      if (!annonce) {
+        throw new Error('Génération échouée.');
+      }
+
+      // Créer le brouillon
+      const brouillon = {
+        id: Batch.nouvelId(),
+        titre: annonce.titre || '',
+        description: annonce.description || '',
+        prix: annonce.prix_suggere ? Math.round(annonce.prix_suggere) : null,
+        categorie: annonce.categorie || '',
+        taille: annonce.taille || '',
+        marque: annonce.marque || '',
+        couleurs: annonce.couleurs || [],
+        etat: annonce.etat || '',
+        matiere: annonce.matiere || '',
+        aVerifier: annonce.a_verifier || [],
+        photoUrl: rep.images[0] ? 'data:image/jpeg;base64,' + rep.images[0] : '',
+        photos: rep.images.map((b64) => 'data:image/jpeg;base64,' + b64),
+        statut: 'pret',
+        dateCreation: Date.now(),
+        dateModification: Date.now(),
+        plateforme: 'vinted'
+      };
+      
+      brouillons.push(brouillon);
+      await sauvegarderBrouillons();
+      dernierBrouillonGenere = brouillon;
+
+      // Mettre à jour l'interface
+      rafraichirDashboard();
+      
+      // Remplir automatiquement si activé
+      if (autoRemplir) {
+        afficherStatut('Annonce générée ! Remplissage du formulaire...', 'succes');
+        
+        const repFill = await chrome.tabs.sendMessage(tabs[0].id, {
+          type: 'fillListing',
+          annonce: brouillon
+        });
+        
+        if (repFill?.ok) {
+          const champsRemplis = Object.entries(repFill.fait || {})
+            .filter(([_, ok]) => ok)
+            .map(([champ]) => champ);
+          const menusRemplis = Object.entries(repFill.menus || {})
+            .filter(([_, etat]) => etat === 'rempli')
+            .map(([menu]) => menu);
+          
+          const total = champsRemplis.length + menusRemplis.length;
+          afficherStatut(`✓ Annonce prête ! ${total} champ(s) rempli(s). Vérifie et publie.`, 'succes');
+        } else {
+          afficherStatut('Annonce générée ! ' + (repFill?.error || 'Remplis le formulaire manuellement.'), 'info');
+        }
+      } else {
+        afficherStatut('✓ Annonce générée ! Clique sur "Remplir" pour compléter le formulaire.', 'succes');
+        naviguerVers('annonces');
+      }
+
+    } catch (e) {
+      console.error('[AF] Erreur traitement auto:', e);
+      const msg = e.message || 'Erreur inconnue';
+      
+      if (msg.includes('Connecte-toi') || msg.includes('clé API')) {
+        afficherStatut('Configure ton compte dans Réglages pour activer la génération.', 'erreur');
+      } else if (msg.includes('serveur') || msg.includes('Backend')) {
+        afficherStatut('Serveur indisponible. Vérifie ta connexion.', 'erreur');
+      } else {
+        afficherStatut('Erreur : ' + msg, 'erreur');
+      }
+      
+      // Remettre le hash à vide pour permettre une nouvelle tentative
+      dernierHashTraite = '';
+      
+    } finally {
+      generationEnCours = false;
+      
+      // Notifier le content script que l'analyse est terminée
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, { type: 'setAnalyseEnCours', enCours: false }).catch(() => {});
+        }
+      } catch (e) {}
+    }
+  }
+
+  // Vérifier périodiquement l'état des photos (backup)
+  async function surveillerPhotos() {
+    if (autoGenerer && !generationEnCours) {
+      await verifierEtTraiterPhotos();
+    }
+    setTimeout(surveillerPhotos, 3000);
+  }
+
   // ========== INIT ==========
   await chargerReglages();
   await chargerBrouillons();
   naviguerVers('dashboard');
+  
+  // Démarrer la surveillance si mode auto activé
+  if (autoGenerer) {
+    setTimeout(verifierEtTraiterPhotos, 1000);
+  }
+  surveillerPhotos();
 
 })();

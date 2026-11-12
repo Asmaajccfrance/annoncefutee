@@ -402,7 +402,7 @@ textarea {
 
 .checkbox-label {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   cursor: pointer;
   margin-bottom: 12px;
@@ -413,6 +413,32 @@ textarea {
   height: 18px;
   accent-color: var(--violet);
   margin: 0;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.checkbox-label.mode-auto {
+  padding: 12px;
+  background: var(--lavande);
+  border-radius: var(--rayon);
+  border: 2px solid transparent;
+  transition: border-color var(--transition);
+}
+
+.checkbox-label.mode-auto:has(input:checked) {
+  border-color: var(--violet);
+}
+
+.checkbox-label div strong {
+  display: block;
+  color: var(--anthracite);
+  margin-bottom: 2px;
+}
+
+.aide-inline {
+  font-size: 0.8rem;
+  color: var(--gris-500);
+  display: block;
 }
 
 /* IMPORT ZONE */

@@ -1,4 +1,4 @@
-// Script injecté sur vinted.fr. Interface minimale : bouton discret pour ouvrir le panneau.
+// Script injecté sur vinted.fr. Détection automatique des photos + remplissage.
 // Il ne publie jamais rien. Le clic "Publier" reste à l'utilisateur.
 
 (() => {
@@ -8,9 +8,14 @@
 
   const MAX_PHOTOS = IA.MAX_PHOTOS;
   const COTE_MAX = 1024;
-  const fichiersAjoutes = [];
   const formaterPrix = IA.formaterPrix;
   const normaliser = IA.normaliser;
+
+  // État de synchronisation pour éviter les doublons
+  let dernieresPhotosHash = '';
+  let dernierEnvoi = 0;
+  let observateurActif = null;
+  let analyseEnCours = false;
 
   function estPageVente() {
     return /^\/items\/(new|\d+\/edit)/.test(location.pathname);
@@ -18,51 +23,69 @@
 
   // ---------- Récupération des photos ----------
 
-  function memoriser(fichiers) {
-    if (!fichiers || !estPageVente()) return;
-    for (const f of fichiers) {
-      if (f && f.type && f.type.startsWith('image/')) fichiersAjoutes.push(f);
-    }
-    if (fichiersAjoutes.length > MAX_PHOTOS * 4) {
-      fichiersAjoutes.splice(0, fichiersAjoutes.length - MAX_PHOTOS);
-    }
-  }
-
-  document.addEventListener('change', (e) => {
-    const t = e.target;
-    if (t && t.tagName === 'INPUT' && t.type === 'file') memoriser(t.files);
-  }, true);
-
-  document.addEventListener('drop', (e) => {
-    if (e.dataTransfer) memoriser(e.dataTransfer.files);
-  }, true);
-
   function horsZone(el) {
     return !!el.closest('header, nav, footer, #annonce-futee-declencheur');
   }
 
-  function trouverPhotos() {
+  function trouverPhotosVinted() {
+    if (!estPageVente()) return [];
+    
+    // Zone du formulaire de vente
     const zone = document.querySelector('main') || document.body;
-    const imgs = Array.from(zone.querySelectorAll('img')).filter((img) => img.src && !horsZone(img));
+    
+    // Chercher les images dans la zone d'upload de photos
+    // Vinted utilise des conteneurs spécifiques pour les photos uploadées
+    const conteneurs = [
+      // Sélecteurs pour les photos uploadées sur Vinted
+      '[data-testid*="photo"]',
+      '[class*="photo-upload"]',
+      '[class*="image-upload"]',
+      '[class*="dropzone"]',
+      '[class*="ItemPhoto"]',
+      'form [class*="photo"]'
+    ];
+
+    const imgs = [];
     const vus = new Set();
-    const unique = (liste) => liste.filter((img) => {
-      if (vus.has(img.src)) return false;
-      vus.add(img.src);
-      return true;
+
+    // D'abord chercher les images blob/data (photos locales uploadées)
+    zone.querySelectorAll('img').forEach((img) => {
+      if (!img.src || horsZone(img)) return;
+      if (vus.has(img.src)) return;
+      
+      // Photos locales (blob ou data URL)
+      if (/^(blob:|data:image\/)/.test(img.src)) {
+        const rect = img.getBoundingClientRect();
+        if (rect.width >= 50 && rect.height >= 50) {
+          vus.add(img.src);
+          imgs.push(img.src);
+        }
+      }
     });
 
-    const locales = unique(imgs.filter((img) => /^(blob:|data:image\/)/.test(img.src)));
-    if (locales.length) return locales.slice(0, MAX_PHOTOS).map((img) => img.src);
+    // Si pas de photos locales, chercher les images du CDN Vinted
+    if (imgs.length === 0) {
+      zone.querySelectorAll('img').forEach((img) => {
+        if (!img.src || horsZone(img) || vus.has(img.src)) return;
+        if (!IA.hoteImageAutorise(img.src)) return;
+        
+        const rect = img.getBoundingClientRect();
+        if (rect.width >= 80 && rect.height >= 80) {
+          vus.add(img.src);
+          imgs.push(img.src);
+        }
+      });
+    }
 
-    const distantes = unique(imgs.filter((img) => {
-      if (!IA.hoteImageAutorise(img.src)) return false;
-      const r = img.getBoundingClientRect();
-      return r.width >= 80 && r.height >= 80;
-    }));
-    if (distantes.length) return distantes.slice(0, MAX_PHOTOS).map((img) => img.src);
-
-    return fichiersAjoutes.slice(-MAX_PHOTOS);
+    return imgs.slice(0, MAX_PHOTOS);
   }
+
+  // Calculer un hash simple pour détecter les changements
+  function calculerHash(photos) {
+    return photos.map((p) => p.slice(-40)).sort().join('|');
+  }
+
+  // ---------- Notification au panneau latéral ----------
 
   function envoyer(message) {
     return new Promise((resolve) => {
@@ -79,6 +102,113 @@
       }
     });
   }
+
+  async function notifierChangementPhotos(photos) {
+    const maintenant = Date.now();
+    const hash = calculerHash(photos);
+    
+    // Éviter les notifications en double (debounce)
+    if (hash === dernieresPhotosHash && maintenant - dernierEnvoi < 2000) {
+      return;
+    }
+    
+    dernieresPhotosHash = hash;
+    dernierEnvoi = maintenant;
+
+    // Notifier le background/sidepanel
+    envoyer({
+      type: 'photosChanged',
+      count: photos.length,
+      hash: hash,
+      pageUrl: location.href,
+      timestamp: maintenant
+    });
+  }
+
+  // ---------- Observation automatique du DOM ----------
+
+  function demarrerObservation() {
+    if (observateurActif || !estPageVente()) return;
+
+    const zone = document.querySelector('main') || document.body;
+    
+    observateurActif = new MutationObserver((mutations) => {
+      // Vérifier si les mutations concernent des images
+      let peutAvoirPhotos = false;
+      
+      for (const mutation of mutations) {
+        // Nouvel élément ajouté
+        if (mutation.addedNodes.length > 0) {
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType === 1) {
+              if (node.tagName === 'IMG' || node.querySelector?.('img')) {
+                peutAvoirPhotos = true;
+                break;
+              }
+            }
+          }
+        }
+        // Attribut src changé sur une image
+        if (mutation.type === 'attributes' && mutation.attributeName === 'src') {
+          if (mutation.target.tagName === 'IMG') {
+            peutAvoirPhotos = true;
+          }
+        }
+        if (peutAvoirPhotos) break;
+      }
+
+      if (peutAvoirPhotos) {
+        // Délai pour laisser le DOM se stabiliser
+        setTimeout(verifierPhotos, 300);
+      }
+    });
+
+    observateurActif.observe(zone, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src']
+    });
+
+    // Écouter aussi les événements de fichiers
+    zone.addEventListener('change', gererChangementFichier, true);
+    zone.addEventListener('drop', gererDrop, true);
+
+    // Vérification initiale
+    setTimeout(verifierPhotos, 500);
+  }
+
+  function arreterObservation() {
+    if (observateurActif) {
+      observateurActif.disconnect();
+      observateurActif = null;
+    }
+  }
+
+  function gererChangementFichier(e) {
+    if (e.target?.tagName === 'INPUT' && e.target.type === 'file') {
+      setTimeout(verifierPhotos, 500);
+    }
+  }
+
+  function gererDrop(e) {
+    if (e.dataTransfer?.files?.length > 0) {
+      setTimeout(verifierPhotos, 500);
+    }
+  }
+
+  function verifierPhotos() {
+    if (!estPageVente()) return;
+    
+    const photos = trouverPhotosVinted();
+    const hash = calculerHash(photos);
+    
+    if (hash !== dernieresPhotosHash) {
+      notifierChangementPhotos(photos);
+    }
+  }
+
+  // ---------- Conversion en base64 ----------
 
   async function lireBlob(source) {
     if (source instanceof Blob) return source;
@@ -107,6 +237,19 @@
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     if (image.close) image.close();
     return canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+  }
+
+  async function collecterPhotosBase64() {
+    const photos = trouverPhotosVinted();
+    const images = [];
+    for (const source of photos) {
+      try {
+        images.push(await enJpegBase64(source));
+      } catch (e) {
+        console.warn('[AF] Photo illisible:', e);
+      }
+    }
+    return images;
   }
 
   // ---------- Remplissage du formulaire ----------
@@ -153,7 +296,7 @@
     const valeurs = {
       titre: annonce.titre || '',
       description: annonce.description || '',
-      prix: formaterPrix(annonce.prix_suggere)
+      prix: formaterPrix(annonce.prix_suggere || annonce.prix)
     };
     for (const cle of Object.keys(valeurs)) {
       if (!valeurs[cle]) continue;
@@ -264,7 +407,7 @@
     return resultat;
   }
 
-  // ---------- Interface minimale : bouton discret ----------
+  // ---------- Interface minimale : indicateur d'état ----------
 
   const STYLE = `
     :host { all: initial; }
@@ -275,7 +418,7 @@
       border: none; border-radius: 24px; cursor: pointer;
       font: 600 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       box-shadow: 0 4px 16px rgba(109, 40, 217, 0.35);
-      transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+      transition: transform 0.15s ease-out, box-shadow 0.15s ease-out, background 0.15s;
     }
     .declencheur:hover {
       transform: translateY(-2px);
@@ -283,10 +426,27 @@
     }
     .declencheur:active { transform: translateY(0); }
     .declencheur svg { width: 18px; height: 18px; fill: currentColor; }
-    .mini { padding: 8px 12px; font-size: 13px; }
-    .mini span { display: none; }
+    .declencheur.actif { background: #149388; }
+    .declencheur.actif::after {
+      content: '';
+      width: 8px; height: 8px;
+      background: #4ADE80;
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.2); }
+    }
+    .badge {
+      background: rgba(255,255,255,0.25);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 700;
+    }
     @media (prefers-reduced-motion: reduce) {
-      .declencheur { transition: none; }
+      .declencheur, .declencheur::after { transition: none; animation: none; }
     }
   `;
 
@@ -305,13 +465,7 @@
     bouton = document.createElement('button');
     bouton.className = 'declencheur';
     bouton.type = 'button';
-    bouton.innerHTML = `
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-      </svg>
-      <span>Ouvrir le panneau complet</span>
-    `;
-    bouton.setAttribute('aria-label', 'Ouvrir le panneau complet');
+    majBouton(0);
 
     bouton.addEventListener('click', () => {
       envoyer({ type: 'openSidePanel' }).catch(() => {});
@@ -321,21 +475,46 @@
     document.documentElement.appendChild(hote);
   }
 
+  function majBouton(nbPhotos, enCours = false) {
+    if (!bouton) return;
+    
+    bouton.classList.toggle('actif', enCours);
+    
+    if (enCours) {
+      bouton.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+        <span>Analyse en cours...</span>
+      `;
+    } else if (nbPhotos > 0) {
+      bouton.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+        <span>Ouvrir le panneau complet</span>
+        <span class="badge">${nbPhotos}</span>
+      `;
+    } else {
+      bouton.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+        <span>Ouvrir le panneau complet</span>
+      `;
+    }
+    bouton.setAttribute('aria-label', 'Ouvrir le panneau complet');
+  }
+
   // ---------- Messages depuis le panneau latéral ----------
 
   chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
     if (!msg || !sender || sender.id !== chrome.runtime.id) return false;
 
     if (msg.type === 'collectPhotos') {
-      (async () => {
-        const images = [];
-        for (const source of trouverPhotos()) {
-          try {
-            images.push(await enJpegBase64(source));
-          } catch (e) { /* photo illisible */ }
-        }
+      collecterPhotosBase64().then((images) => {
         repondre({ ok: true, images: images });
-      })();
+      });
       return true;
     }
 
@@ -358,13 +537,27 @@
     }
 
     if (msg.type === 'getPageInfo') {
-      const photos = trouverPhotos();
+      const photos = trouverPhotosVinted();
       repondre({
         ok: true,
         estPageVente: estPageVente(),
         photos: photos.length,
+        hash: calculerHash(photos),
         url: location.href
       });
+      return true;
+    }
+
+    if (msg.type === 'setAnalyseEnCours') {
+      analyseEnCours = !!msg.enCours;
+      majBouton(trouverPhotosVinted().length, analyseEnCours);
+      repondre({ ok: true });
+      return true;
+    }
+
+    if (msg.type === 'forceCheckPhotos') {
+      verifierPhotos();
+      repondre({ ok: true });
       return true;
     }
 
@@ -376,26 +569,40 @@
   let dernierChemin = null;
 
   function synchroniser() {
-    if (location.pathname !== dernierChemin) {
-      dernierChemin = location.pathname;
-      fichiersAjoutes.length = 0;
+    const cheminActuel = location.pathname;
+    
+    if (cheminActuel !== dernierChemin) {
+      dernierChemin = cheminActuel;
+      dernieresPhotosHash = '';
 
       if (estPageVente()) {
         if (!hote) creerInterface();
         hote.style.display = '';
-      } else if (hote) {
-        hote.style.display = 'none';
+        demarrerObservation();
+        // Vérifier les photos après un court délai
+        setTimeout(verifierPhotos, 800);
+      } else {
+        if (hote) hote.style.display = 'none';
+        arreterObservation();
       }
     }
   }
 
   window.__annonceFutee = {
-    estPageVente, trouverPhotos, remplir, remplirMenus, formaterPrix, CHAMPS, synchroniser
+    estPageVente, trouverPhotosVinted, remplir, remplirMenus, formaterPrix, CHAMPS, synchroniser,
+    verifierPhotos, collecterPhotosBase64
   };
 
   function planifier() {
     synchroniser();
-    setTimeout(planifier, estPageVente() ? 800 : 2000);
+    
+    // Sur page de vente, vérifier périodiquement (backup de l'observateur)
+    if (estPageVente()) {
+      const photos = trouverPhotosVinted();
+      majBouton(photos.length, analyseEnCours);
+    }
+    
+    setTimeout(planifier, estPageVente() ? 1500 : 3000);
   }
   planifier();
 })();
