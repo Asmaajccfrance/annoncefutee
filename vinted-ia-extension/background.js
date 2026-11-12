@@ -92,14 +92,14 @@ async function generer(images, precisions) {
   if (prec) {
     consigne += '\n\nPrécisions du vendeur (prioritaires sur les photos) : ' + prec;
   }
-  consigne += '\n- Description : ' + IA.consigneDescription(reglages);
-  if (signature) {
-    consigne +=
-      '\n\nTermine la description' +
-      (reglages.hashtags ? ', avant les hashtags,' : '') +
-      ' par cette phrase telle quelle : ' +
-      signature;
-  }
+    consigne += '\n- Description : ' + IA.consigneDescription(reglages);
+    if (signature) {
+      consigne +=
+        '\n\nLa ligne d\'expédition' +
+        (reglages.hashtags ? ', juste avant les hashtags,' : '') +
+        ' est exactement cette formule : ' +
+        signature;
+    }
   contenu.push({ type: 'text', text: consigne });
 
   const appel = IA.optionsAppel(model);
@@ -297,11 +297,19 @@ chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
     chrome.runtime.openOptionsPage();
     return false;
   }
+  if (msg.type === 'openSidePanel') {
+    const tabId = sender.tab && sender.tab.id;
+    const ouverture = tabId ? chrome.sidePanel.open({ tabId: tabId }) : chrome.sidePanel.open({});
+    return traiter(ouverture.then(() => true));
+  }
   return false;
 });
 
-chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
+function activerPanneau() {
+  if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  }
+}
 
-chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === 'install') chrome.runtime.openOptionsPage();
-});
+activerPanneau();
+chrome.runtime.onInstalled.addListener(activerPanneau);

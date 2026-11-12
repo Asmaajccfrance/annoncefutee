@@ -4,6 +4,7 @@ namespace App\Services\OpenAI;
 
 use App\Exceptions\ApiException;
 use App\Exceptions\IncompleteListing;
+use App\Services\Listings\DescriptionBrief;
 use App\Services\Listings\ListingCatalog;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
@@ -127,31 +128,7 @@ class OpenAIListingClient
      */
     private function instructions(string $precisions, array $prefs): string
     {
-        $lengths = [
-            'court' => '2 lignes maximum',
-            'normal' => '3 à 6 lignes',
-            'detaille' => '6 à 10 lignes',
-        ];
-        $style = $lengths[$prefs['style'] ?? ''] ?? $lengths['normal'];
-        $tags = ($prefs['hashtags'] ?? true)
-            ? 'suivie de 3 à 5 hashtags pertinents'
-            : 'sans hashtag';
-
-        $text = 'Tu décris un article de seconde main pour un particulier. '
-            .'N\'invente aucune marque, taille, matière ou défaut qui n\'est pas visible ou confirmé. '
-            .'Laisse le champ vide si l\'information manque, et ajoute-la dans a_verifier. '
-            .'Signale les défauts visibles. Ton naturel, en français. '
-            ."Description : {$style}, {$tags}.";
-
-        $signature = trim((string) ($prefs['signature'] ?? ''));
-        if ($signature !== '') {
-            $text .= "\nTermine la description par cette phrase exacte : {$signature}";
-        }
-        if (trim($precisions) !== '') {
-            $text .= "\nPrécisions du vendeur, prioritaires sur les photos : ".trim($precisions);
-        }
-
-        return $text;
+        return DescriptionBrief::write($prefs, $precisions);
     }
 
     private function imageDetail(): string

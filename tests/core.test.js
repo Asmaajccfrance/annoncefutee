@@ -133,8 +133,11 @@ test('Haiku garde l’appel forcé, Sonnet et Opus passent en outil strict', () 
   assert.equal(outilHaiku.input_schema.properties.couleurs.maxItems, 2);
   assert.equal(
     outilHaiku.input_schema.properties.description.description,
-    'Description naturelle en français, 3 à 6 lignes, sans emoji en excès, suivie de 3 à 5 hashtags pertinents.'
+    IA.consigneDescription({ style: 'normal', hashtags: true })
   );
+  assert.equal(outilHaiku.input_schema.properties.description.description.includes('•'), true);
+  assert.equal(outilHaiku.input_schema.properties.description.description.includes('État :'), true);
+  assert.equal(outilHaiku.input_schema.properties.description.description.includes('astérisque'), true);
 
   const sonnet = IA.optionsAppel('claude-sonnet-5-5');
   assert.deepEqual(sonnet.tool_choice, { type: 'auto' });
@@ -151,6 +154,39 @@ test('Haiku garde l’appel forcé, Sonnet et Opus passent en outil strict', () 
   assert.equal(opus.strict, true);
 });
 
+test('la description demandée suit le format d\'annonce', () => {
+  const normale = IA.consigneDescription({ style: 'normal', hashtags: true });
+  assert.equal(normale.includes('type d\'article'), true);
+  assert.equal(normale.includes('couleur et le style'), true);
+  assert.equal(normale.includes('trois à cinq puces'), true);
+  assert.equal(normale.includes('État :'), true);
+  assert.equal(normale.includes('Formule d\'expédition'), true);
+  assert.equal(normale.includes('3 à 5 hashtags Vinted'), true);
+  assert.equal(normale.includes('*'), false);
+  assert.equal(normale.includes('même phrase'), true);
+
+  const courte = IA.consigneDescription({ style: 'court', hashtags: false });
+  assert.equal(courte.includes('sans retirer un défaut'), true);
+  assert.equal(courte.includes('N\'ajoute aucun hashtag.'), true);
+  assert.equal(IA.consigneDescription({ style: 'inconnu', hashtags: true }).includes('trois à cinq puces'), true);
+});
+
+test('sans session Laravel, Claude reste disponible avec le même format', () => {
+  assert.equal(IA.choisirMoteur({ apiKey: 'sk-ant-test' }), 'claude');
+  assert.equal(IA.choisirMoteur({ backendToken: '', apiKey: 'sk-ant-test' }), 'claude');
+  assert.equal(IA.choisirMoteur({}), 'none');
+  assert.equal(IA.choisirMoteur({ backendToken: 'jeton', apiKey: 'sk-ant-test' }), 'backend');
+  const consigne = IA.consigneDescription({ style: 'detaille', hashtags: true });
+  assert.equal(consigne.includes('État :'), true);
+  assert.equal(consigne.includes('même phrase'), true);
+  assert.equal(JSON.stringify(IA.corpsAnalyse(['abcdabcdabcdabcd'], 'coton', {
+    apiKey: 'sk-ant-test',
+    style: 'normal',
+    hashtags: true,
+    signature: 'Envoi soigné.'
+  })).includes('sk-ant-test'), false);
+});
+
 test('les messages ne sont acceptés que depuis la bonne origine', () => {
   const page = { id: EXT, url: 'https://www.vinted.fr/items/new' };
   const options = { id: EXT, url: 'chrome-extension://' + EXT + '/options.html' };
@@ -162,7 +198,16 @@ test('les messages ne sont acceptés que depuis la bonne origine', () => {
   assert.equal(IA.autoriserMessage('getPrefs', page, EXT), true);
   assert.equal(IA.autoriserMessage('testKey', page, EXT), false);
   assert.equal(IA.autoriserMessage('testKey', options, EXT), true);
+  const panneau = { id: EXT, url: 'chrome-extension://' + EXT + '/sidepanel.html' };
+  const fauxPanneau = { id: EXT, url: 'chrome-extension://' + EXT + '/sidepanel.html.evil' };
   assert.equal(IA.autoriserMessage('generate', options, EXT), false);
+  assert.equal(IA.autoriserMessage('generate', panneau, EXT), true);
+  assert.equal(IA.autoriserMessage('fetchImage', panneau, EXT), true);
+  assert.equal(IA.autoriserMessage('getPrefs', panneau, EXT), true);
+  assert.equal(IA.autoriserMessage('generate', fauxPanneau, EXT), false);
+  assert.equal(IA.autoriserMessage('openSidePanel', page, EXT), true);
+  assert.equal(IA.autoriserMessage('openSidePanel', piege, EXT), false);
+  assert.equal(IA.autoriserMessage('authLogin', panneau, EXT), true);
   assert.equal(IA.autoriserMessage('openOptions', page, EXT), true);
   assert.equal(IA.autoriserMessage('generate', autre, EXT), false);
   assert.equal(IA.autoriserMessage('generate', piege, EXT), false);
@@ -244,7 +289,9 @@ test('le jeton ne quitte pas l\'origine contrôlée', () => {
 });
 
 test('le manifeste n\'accorde le serveur qu\'à l\'origine officielle et au développement local', () => {
-  assert.deepEqual(manifest.permissions, ['storage']);
+  assert.deepEqual(manifest.permissions, ['storage', 'sidePanel']);
+  assert.equal(manifest.side_panel.default_path, 'sidepanel.html');
+  assert.equal(manifest.name, 'Annonce Futée');
   assert.equal(Object.prototype.hasOwnProperty.call(manifest, 'optional_host_permissions'), false);
   assert.deepEqual(manifest.host_permissions, [
     'https://api.anthropic.com/*',

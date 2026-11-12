@@ -98,12 +98,15 @@ class ProbeOpenAI extends Command
         $this->line($label.'_completion_tokens='.$result['usage']['completion_tokens']);
         $this->line($label.'_estimated_usd='.number_format($micros / 1_000_000, 6, '.', ''));
         $this->line($label.'_titre='.$this->plain($annonce['titre'] ?? ''));
+        $this->line($label.'_description='.$this->plain($annonce['description'] ?? ''));
         $this->line($label.'_marque='.$this->plain($annonce['marque'] ?? ''));
         $this->line($label.'_taille='.$this->plain($annonce['taille'] ?? ''));
         $this->line($label.'_matiere='.$this->plain($annonce['matiere'] ?? ''));
         $this->line($label.'_etat='.$this->plain($annonce['etat'] ?? ''));
+        $this->line($label.'_couleurs='.$this->plain($this->liste($annonce['couleurs'] ?? [])));
         $this->line($label.'_prix='.(string) ($annonce['prix_suggere'] ?? ''));
         $this->line($label.'_categorie='.$this->plain(($annonce['categorie'] ?? '').' / '.($annonce['sous_categorie'] ?? '')));
+        $this->line($label.'_a_verifier='.$this->plain($this->liste($annonce['a_verifier'] ?? [])));
 
         return true;
     }
@@ -111,8 +114,24 @@ class ProbeOpenAI extends Command
     private function plain(mixed $value): string
     {
         $text = trim(preg_replace('/\s+/', ' ', (string) $value) ?? '');
+        $text = preg_replace('/sk-[A-Za-z0-9_\-]{8,}/', '[redacted]', $text) ?? $text;
 
         return substr($text, 0, 180);
+    }
+
+    private function liste(mixed $value): string
+    {
+        if (! is_array($value)) {
+            return '';
+        }
+        $parts = [];
+        foreach ($value as $item) {
+            if (is_string($item) && $item !== '') {
+                $parts[] = $item;
+            }
+        }
+
+        return implode(', ', $parts);
     }
 
     private function jpeg(string $label): string

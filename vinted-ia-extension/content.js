@@ -1,9 +1,8 @@
-// Script injecté sur vinted.fr. Il n'agit que sur la page "Vendre un article".
-// Il ne publie jamais rien : il lit les photos, demande l'annonce à l'IA,
-// remplit les champs texte et affiche le reste à côté. Le clic "Publier" reste à toi.
+// Script injecté sur vinted.fr. Interface minimale : bouton discret pour ouvrir le panneau.
+// Il ne publie jamais rien. Le clic "Publier" reste à l'utilisateur.
 
 (() => {
-  if (window.__annonceIA) return;
+  if (window.__annonceFutee) return;
   const IA = globalThis.VintedIA;
   if (!IA) return;
 
@@ -13,16 +12,12 @@
   const formaterPrix = IA.formaterPrix;
   const normaliser = IA.normaliser;
 
-  // ---------- Page concernée ----------
-
   function estPageVente() {
     return /^\/items\/(new|\d+\/edit)/.test(location.pathname);
   }
 
   // ---------- Récupération des photos ----------
 
-  // Filet de sécurité : on mémorise les fichiers image ajoutés au formulaire,
-  // au cas où les miniatures de la page ne seraient pas lisibles.
   function memoriser(fichiers) {
     if (!fichiers || !estPageVente()) return;
     for (const f of fichiers) {
@@ -32,53 +27,40 @@
       fichiersAjoutes.splice(0, fichiersAjoutes.length - MAX_PHOTOS);
     }
   }
-  document.addEventListener(
-    'change',
-    (e) => {
-      const t = e.target;
-      if (t && t.tagName === 'INPUT' && t.type === 'file') memoriser(t.files);
-    },
-    true
-  );
-  document.addEventListener(
-    'drop',
-    (e) => {
-      if (e.dataTransfer) memoriser(e.dataTransfer.files);
-    },
-    true
-  );
+
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t && t.tagName === 'INPUT' && t.type === 'file') memoriser(t.files);
+  }, true);
+
+  document.addEventListener('drop', (e) => {
+    if (e.dataTransfer) memoriser(e.dataTransfer.files);
+  }, true);
 
   function horsZone(el) {
-    return !!el.closest('header, nav, footer, #annonce-ia-hote');
+    return !!el.closest('header, nav, footer, #annonce-futee-declencheur');
   }
 
   function trouverPhotos() {
     const zone = document.querySelector('main') || document.body;
     const imgs = Array.from(zone.querySelectorAll('img')).filter((img) => img.src && !horsZone(img));
-
     const vus = new Set();
-    const unique = (liste) =>
-      liste.filter((img) => {
-        if (vus.has(img.src)) return false;
-        vus.add(img.src);
-        return true;
-      });
+    const unique = (liste) => liste.filter((img) => {
+      if (vus.has(img.src)) return false;
+      vus.add(img.src);
+      return true;
+    });
 
-    // 1. Miniatures des photos qui viennent d'être ajoutées (adresses locales).
     const locales = unique(imgs.filter((img) => /^(blob:|data:image\/)/.test(img.src)));
     if (locales.length) return locales.slice(0, MAX_PHOTOS).map((img) => img.src);
 
-    // 2. Photos déjà enregistrées (modification d'une annonce existante).
-    const distantes = unique(
-      imgs.filter((img) => {
-        if (!IA.hoteImageAutorise(img.src)) return false;
-        const r = img.getBoundingClientRect();
-        return r.width >= 80 && r.height >= 80;
-      })
-    );
+    const distantes = unique(imgs.filter((img) => {
+      if (!IA.hoteImageAutorise(img.src)) return false;
+      const r = img.getBoundingClientRect();
+      return r.width >= 80 && r.height >= 80;
+    }));
     if (distantes.length) return distantes.slice(0, MAX_PHOTOS).map((img) => img.src);
 
-    // 3. Fichiers mémorisés au moment de l'ajout.
     return fichiersAjoutes.slice(-MAX_PHOTOS);
   }
 
@@ -87,13 +69,13 @@
       try {
         chrome.runtime.sendMessage(message, (rep) => {
           if (chrome.runtime.lastError) {
-            resolve({ ok: false, error: 'Extension rechargée : actualise la page Vinted (F5).' });
+            resolve({ ok: false, error: 'Extension rechargée : actualise la page (F5).' });
           } else {
-            resolve(rep || { ok: false, error: 'Pas de réponse de l\'extension.' });
+            resolve(rep || { ok: false, error: 'Pas de réponse.' });
           }
         });
       } catch (e) {
-        resolve({ ok: false, error: 'Extension rechargée : actualise la page Vinted (F5).' });
+        resolve({ ok: false, error: 'Extension rechargée : actualise la page (F5).' });
       }
     });
   }
@@ -112,7 +94,6 @@
     }
   }
 
-  // Réduit la photo (1024 px max) et la convertit en JPEG : plus rapide et moins cher.
   async function enJpegBase64(source) {
     const blob = await lireBlob(source);
     const image = await createImageBitmap(blob, { imageOrientation: 'from-image' });
@@ -152,13 +133,10 @@
 
   const CHAMPS = {
     titre: () => chercherChamp(IA.CHAMPS.titre.selecteurs, IA.CHAMPS.titre.balises, IA.CHAMPS.titre.motif),
-    description: () =>
-      chercherChamp(IA.CHAMPS.description.selecteurs, IA.CHAMPS.description.balises, IA.CHAMPS.description.motif),
+    description: () => chercherChamp(IA.CHAMPS.description.selecteurs, IA.CHAMPS.description.balises, IA.CHAMPS.description.motif),
     prix: () => chercherChamp(IA.CHAMPS.prix.selecteurs, IA.CHAMPS.prix.balises, IA.CHAMPS.prix.motif)
   };
 
-  // Vinted utilise React : il faut passer par le "setter" natif puis émettre
-  // les événements, sinon la valeur est effacée au prochain rafraîchissement.
   function ecrire(el, valeur) {
     const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const desc = Object.getOwnPropertyDescriptor(proto, 'value');
@@ -185,17 +163,12 @@
           ecrire(el, valeurs[cle]);
           fait[cle] = true;
         }
-      } catch (e) {
-        /* champ introuvable : la valeur reste disponible dans le panneau */
-      }
+      } catch (e) { /* champ introuvable */ }
     }
     return fait;
   }
 
-  // ---------- Menus déroulants (état, couleurs, taille) ----------
-  // Même geste que toi : on ouvre le menu, on clique sur l'option dont le texte
-  // correspond, on referme. Si le menu ou l'option est introuvable, on ne touche
-  // à rien et la ligne reste marquée « à choisir ».
+  // ---------- Menus déroulants ----------
 
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -236,7 +209,6 @@
     return null;
   }
 
-  // Renvoie 'rempli', 'deja' (le menu avait déjà une valeur) ou 'a_choisir'.
   async function choisirDansMenu(def, valeurs) {
     const cibles = (valeurs || []).map(normaliser).filter(Boolean);
     if (!cibles.length) return 'a_choisir';
@@ -264,7 +236,6 @@
       await pause(200);
     }
 
-    // Refermer le menu s'il est resté ouvert (cas des choix multiples).
     const ouvert = () => tous().some(nouveau);
     if (ouvert()) {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -288,352 +259,138 @@
     for (const [cle, valeurs] of essais) {
       try {
         resultat[cle] = await choisirDansMenu(MENUS[cle], valeurs);
-      } catch (e) {
-        /* menu inattendu : on laisse la main à l'utilisateur */
-      }
+      } catch (e) { /* menu inattendu */ }
     }
     return resultat;
   }
 
-  // ---------- Interface ----------
+  // ---------- Interface minimale : bouton discret ----------
 
   const STYLE = `
     :host { all: initial; }
-    * { box-sizing: border-box; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-    .boite {
-      position: fixed; right: 20px; bottom: 20px; z-index: 2147483000;
-      width: 340px; max-height: calc(100vh - 40px); display: flex; flex-direction: column;
-      background: #fff; color: #171717; border: 1px solid #d9d9d9; border-radius: 12px;
-      box-shadow: 0 8px 28px rgba(0,0,0,.18); font-size: 14px; line-height: 1.4;
+    .declencheur {
+      position: fixed; right: 16px; bottom: 16px; z-index: 2147483000;
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px; background: #6D28D9; color: #fff;
+      border: none; border-radius: 24px; cursor: pointer;
+      font: 600 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      box-shadow: 0 4px 16px rgba(109, 40, 217, 0.35);
+      transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
     }
-    .boite.replie { width: auto; }
-    .boite.replie .corps { display: none; }
-    .entete {
-      display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      padding: 10px 12px; font-weight: 600; cursor: pointer; user-select: none;
+    .declencheur:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(109, 40, 217, 0.45);
     }
-    .entete span.petit { font-weight: 400; color: #666; font-size: 12px; }
-    .corps { padding: 0 12px 12px; overflow-y: auto; }
-    input.precisions {
-      width: 100%; padding: 8px 10px; border: 1px solid #c9c9c9; border-radius: 8px;
-      font-size: 13px; margin-bottom: 8px; color: #171717; background: #fff;
-    }
-    button { font: inherit; cursor: pointer; border-radius: 8px; }
-    button.principal {
-      width: 100%; padding: 10px 12px; border: 0; background: #007782; color: #fff; font-weight: 600;
-    }
-    button.principal:disabled { opacity: .6; cursor: progress; }
-    button.lien { background: none; border: 0; color: #007782; padding: 0; text-decoration: underline; font-size: 13px; }
-    .etat { margin-top: 8px; font-size: 13px; color: #444; min-height: 18px; }
-    .etat.erreur { color: #b3261e; }
-    .ligne { border-top: 1px solid #ececec; padding: 8px 0; }
-    .ligne .haut { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .ligne .nom { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: .03em; }
-    .ligne .marque { font-size: 11px; padding: 1px 6px; border-radius: 10px; }
-    .marque.ok { background: #e3f4ea; color: #17643a; }
-    .marque.main { background: #fdf0d5; color: #7a4b00; }
-    .ligne .valeur { margin-top: 3px; white-space: pre-wrap; word-break: break-word; }
-    button.copier { border: 1px solid #c9c9c9; background: #fff; color: #171717; padding: 2px 8px; font-size: 12px; }
-    .averifier { margin: 8px 0 0; padding: 8px 10px; background: #fdf0d5; color: #5c3900; border-radius: 8px; font-size: 13px; }
-    .averifier ul { margin: 4px 0 0; padding-left: 18px; }
-    .note { margin-top: 8px; font-size: 12px; color: #666; }
-    a.comparer {
-      display: block; margin: 0 0 8px; padding: 7px 10px; text-align: center; text-decoration: none;
-      border: 1px solid #007782; border-radius: 8px; color: #007782; font-size: 13px; font-weight: 600;
+    .declencheur:active { transform: translateY(0); }
+    .declencheur svg { width: 18px; height: 18px; fill: currentColor; }
+    .mini { padding: 8px 12px; font-size: 13px; }
+    .mini span { display: none; }
+    @media (prefers-reduced-motion: reduce) {
+      .declencheur { transition: none; }
     }
   `;
 
   let hote = null;
-  let racine = null;
-  let refs = {};
+  let bouton = null;
 
   function creerInterface() {
     hote = document.createElement('div');
-    hote.id = 'annonce-ia-hote';
-    racine = hote.attachShadow({ mode: 'closed' });
+    hote.id = 'annonce-futee-declencheur';
+    const racine = hote.attachShadow({ mode: 'closed' });
 
     const style = document.createElement('style');
     style.textContent = STYLE;
     racine.appendChild(style);
 
-    const boite = document.createElement('div');
-    boite.className = 'boite';
-    boite.innerHTML =
-      '<div class="entete"><span>Annonce IA</span><span class="petit bascule">Réduire</span></div>' +
-      '<div class="corps">' +
-      '<input class="precisions" type="text" maxlength="300" placeholder="Précisions (facultatif) : taille, défauts, marque…">' +
-      '<button class="principal" type="button">Générer avec l\'IA</button>' +
-      '<div class="etat" role="status"></div>' +
-      '<div class="resultat"></div>' +
-      '</div>';
-    racine.appendChild(boite);
+    bouton = document.createElement('button');
+    bouton.className = 'declencheur';
+    bouton.type = 'button';
+    bouton.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+      </svg>
+      <span>Ouvrir le panneau complet</span>
+    `;
+    bouton.setAttribute('aria-label', 'Ouvrir le panneau complet');
 
-    refs = {
-      boite,
-      entete: boite.querySelector('.entete'),
-      bascule: boite.querySelector('.bascule'),
-      precisions: boite.querySelector('.precisions'),
-      bouton: boite.querySelector('.principal'),
-      etat: boite.querySelector('.etat'),
-      resultat: boite.querySelector('.resultat')
-    };
-
-    refs.entete.addEventListener('click', () => {
-      const replie = refs.boite.classList.toggle('replie');
-      refs.bascule.textContent = replie ? 'Ouvrir' : 'Réduire';
-    });
-    refs.bouton.addEventListener('click', lancer);
-    refs.precisions.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') lancer();
+    bouton.addEventListener('click', () => {
+      envoyer({ type: 'openSidePanel' }).catch(() => {});
     });
 
+    racine.appendChild(bouton);
     document.documentElement.appendChild(hote);
   }
 
-  function dire(texte, erreur) {
-    refs.etat.textContent = texte || '';
-    refs.etat.classList.toggle('erreur', !!erreur);
-  }
+  // ---------- Messages depuis le panneau latéral ----------
 
-  function ajouterLigne(nom, valeur, rempli, complement) {
-    if (!valeur) return;
-    const ligne = document.createElement('div');
-    ligne.className = 'ligne';
+  chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
+    if (!msg || !sender || sender.id !== chrome.runtime.id) return false;
 
-    const haut = document.createElement('div');
-    haut.className = 'haut';
-    const gauche = document.createElement('span');
-    gauche.className = 'nom';
-    gauche.textContent = nom;
-    haut.appendChild(gauche);
-
-    const droite = document.createElement('span');
-    const LIBELLES = { rempli: 'rempli', deja: 'déjà rempli', a_coller: 'à coller', a_choisir: 'à choisir' };
-    if (rempli !== undefined) {
-      const statut = rempli === true ? 'rempli' : rempli === false ? 'a_coller' : rempli;
-      const m = document.createElement('span');
-      m.className = 'marque ' + (statut === 'rempli' || statut === 'deja' ? 'ok' : 'main');
-      m.textContent = LIBELLES[statut] || statut;
-      droite.appendChild(m);
-      droite.appendChild(document.createTextNode(' '));
-    }
-    const copier = document.createElement('button');
-    copier.type = 'button';
-    copier.className = 'copier';
-    copier.textContent = 'Copier';
-    copier.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(valeur);
-        copier.textContent = 'Copié';
-      } catch (e) {
-        copier.textContent = 'Échec';
-      }
-      setTimeout(() => (copier.textContent = 'Copier'), 1200);
-    });
-    droite.appendChild(copier);
-    haut.appendChild(droite);
-
-    const v = document.createElement('div');
-    v.className = 'valeur';
-    v.textContent = complement ? valeur + ' ' + complement : valeur;
-
-    ligne.appendChild(haut);
-    ligne.appendChild(v);
-    refs.resultat.appendChild(ligne);
-  }
-
-  function afficher(annonce, fait, menus) {
-    refs.resultat.textContent = '';
-    menus = menus || {};
-
-    const points = Array.isArray(annonce.a_verifier) ? annonce.a_verifier.filter(Boolean) : [];
-    if (points.length) {
-      const bloc = document.createElement('div');
-      bloc.className = 'averifier';
-      bloc.appendChild(document.createTextNode('À vérifier avant de publier :'));
-      const ul = document.createElement('ul');
-      for (const p of points) {
-        const li = document.createElement('li');
-        li.textContent = p;
-        ul.appendChild(li);
-      }
-      bloc.appendChild(ul);
-      refs.resultat.appendChild(bloc);
-    }
-
-    ajouterLigne('Titre', annonce.titre, fait.titre);
-    ajouterLigne('Description', annonce.description, fait.description);
-    const prix = formaterPrix(annonce.prix_suggere);
-    const prixIa = formaterPrix(annonce.prix_ia);
-    const regle = prixIa && prixIa !== prix ? '(estimation IA : ' + prixIa + ' €, ta règle de prix appliquée)' : '';
-    ajouterLigne('Prix conseillé', prix ? prix + ' €' : '', fait.prix, regle);
-
-    // Le prix est une estimation : un clic pour comparer avec les annonces du même article.
-    if (annonce.titre) {
-      const comparer = document.createElement('a');
-      comparer.className = 'comparer';
-      comparer.target = '_blank';
-      comparer.rel = 'noopener';
-      comparer.href = 'https://www.vinted.fr/catalog?search_text=' + encodeURIComponent(annonce.titre);
-      comparer.textContent = 'Voir les annonces similaires';
-      refs.resultat.appendChild(comparer);
-    }
-
-    ajouterLigne('État', annonce.etat, menus.etat);
-    ajouterLigne('Couleurs', Array.isArray(annonce.couleurs) ? annonce.couleurs.join(', ') : '', menus.couleurs);
-    ajouterLigne('Taille', annonce.taille, menus.taille);
-    ajouterLigne('Matière', annonce.matiere, menus.matiere);
-    ajouterLigne('Catégorie', annonce.categorie);
-    ajouterLigne('Sous-catégorie', annonce.sous_categorie);
-    ajouterLigne('Marque', annonce.marque);
-
-    const note = document.createElement('div');
-    note.className = 'note';
-    note.textContent = 'Catégorie et marque : Vinted les propose souvent seul à partir de la photo. Vérifie-les avant de publier.';
-    refs.resultat.appendChild(note);
-  }
-
-  let enCours = false;
-
-  async function lancer() {
-    if (enCours) return;
-    enCours = true;
-    refs.bouton.disabled = true;
-    refs.resultat.textContent = '';
-
-    try {
-      const sources = trouverPhotos();
-      if (!sources.length) {
-        dire('Ajoute d\'abord tes photos dans le formulaire Vinted, puis clique à nouveau.', true);
-        return;
-      }
-
-      dire('Préparation de ' + sources.length + ' photo' + (sources.length > 1 ? 's' : '') + '…');
-      const images = [];
-      for (const s of sources) {
-        try {
-          images.push(await enJpegBase64(s));
-        } catch (e) {
-          /* photo illisible : on continue avec les autres */
+    if (msg.type === 'collectPhotos') {
+      (async () => {
+        const images = [];
+        for (const source of trouverPhotos()) {
+          try {
+            images.push(await enJpegBase64(source));
+          } catch (e) { /* photo illisible */ }
         }
-      }
-      if (!images.length) {
-        dire('Impossible de lire les photos. Retire-les puis ajoute-les à nouveau.', true);
-        return;
-      }
+        repondre({ ok: true, images: images });
+      })();
+      return true;
+    }
 
-      dire('L\'IA rédige l\'annonce…');
-      const rep = await envoyer({
-        type: 'generate',
-        images,
-        precisions: refs.precisions.value.trim()
+    if (msg.type === 'fillListing') {
+      (async () => {
+        const data = msg.annonce;
+        if (!data || typeof data !== 'object') {
+          repondre({ ok: false, error: 'Annonce absente.' });
+          return;
+        }
+        if (!estPageVente()) {
+          repondre({ ok: false, error: 'Ouvre la page Vinted « Vendre un article ».' });
+          return;
+        }
+        const fait = remplir(data);
+        const menus = await remplirMenus(data);
+        repondre({ ok: true, fait: fait, menus: menus });
+      })();
+      return true;
+    }
+
+    if (msg.type === 'getPageInfo') {
+      const photos = trouverPhotos();
+      repondre({
+        ok: true,
+        estPageVente: estPageVente(),
+        photos: photos.length,
+        url: location.href
       });
-
-      if (!rep.ok) {
-        dire(rep.error || 'Erreur inconnue.', true);
-        if (rep.code === 'NO_KEY') {
-          const lien = document.createElement('button');
-          lien.type = 'button';
-          lien.className = 'lien';
-          lien.textContent = 'Ouvrir les réglages';
-          lien.addEventListener('click', () => envoyer({ type: 'openOptions' }));
-          refs.resultat.appendChild(lien);
-        }
-        return;
-      }
-
-      const fait = remplir(rep.data);
-      dire('Sélection de l\'état, des couleurs, de la taille et de la matière…');
-      const menus = await remplirMenus(rep.data);
-      afficher(rep.data, fait, menus);
-      const textesOk = Object.values(fait).every(Boolean);
-      // Un menu sans valeur proposée par l'IA (taille illisible, par ex.) n'est pas affiché : on ne le compte pas.
-      const propose = {
-        etat: !!rep.data.etat,
-        couleurs: Array.isArray(rep.data.couleurs) && rep.data.couleurs.length > 0,
-        taille: !!rep.data.taille,
-        matiere: !!rep.data.matiere
-      };
-      const resteMenus = Object.keys(menus).some((k) => propose[k] && menus[k] === 'a_choisir');
-      dire(
-        textesOk && !resteMenus
-          ? 'Annonce remplie. Vérifie, puis publie.'
-          : 'Annonce prête. Complète ce qui est marqué « à coller » ou « à choisir », puis publie.'
-      );
-    } catch (e) {
-      dire('Erreur : ' + (e && e.message ? e.message : e), true);
-    } finally {
-      enCours = false;
-      refs.bouton.disabled = false;
+      return true;
     }
-  }
 
-  // ---------- Affichage selon la page (Vinted change de page sans recharger) ----------
+    return false;
+  });
+
+  // ---------- Gestion de la navigation ----------
 
   let dernierChemin = null;
-
-  // Génération automatique (si activée dans les réglages) : une seule fois par
-  // nouvelle annonce, quand les photos sont en place et que le titre est vide.
-  let prefs = { autoGenerer: false };
-  let autoFait = false;
-  let nbPhotos = 0;
-  let stableDepuis = 0;
-  const DELAI_STABLE = 2500;
-
-  function surveillerPhotos() {
-    if (!prefs.autoGenerer || autoFait || enCours) return;
-    if (!/^\/items\/new/.test(location.pathname)) return;
-
-    const nb = trouverPhotos().length;
-    if (nb === 0) {
-      nbPhotos = 0;
-      return;
-    }
-    if (nb !== nbPhotos) {
-      // Une photo vient d'être ajoutée ou retirée : on attend que ça se stabilise.
-      nbPhotos = nb;
-      stableDepuis = Date.now();
-      return;
-    }
-    if (Date.now() - stableDepuis < DELAI_STABLE) return;
-
-    autoFait = true;
-    const titre = CHAMPS.titre();
-    if (titre && titre.value.trim()) return; // annonce déjà commencée : on n'écrase rien
-    lancer();
-  }
 
   function synchroniser() {
     if (location.pathname !== dernierChemin) {
       dernierChemin = location.pathname;
       fichiersAjoutes.length = 0;
-      autoFait = false;
-      nbPhotos = 0;
 
       if (estPageVente()) {
         if (!hote) creerInterface();
         hote.style.display = '';
-        refs.resultat.textContent = '';
-        refs.precisions.value = '';
-        dire('');
-        envoyer({ type: 'getPrefs' }).then((rep) => {
-          if (rep && rep.ok && rep.data) {
-            prefs = rep.data;
-            if (prefs.autoGenerer && !enCours && !refs.etat.textContent) {
-              dire('Génération automatique activée : ajoute tes photos.');
-            }
-          }
-        });
       } else if (hote) {
         hote.style.display = 'none';
       }
     }
-    if (hote && estPageVente()) surveillerPhotos();
   }
 
-  window.__annonceIA = {
-    estPageVente, trouverPhotos, remplir, remplirMenus, formaterPrix, CHAMPS, synchroniser,
-    etatAuto: () => ({ prefs, autoFait, nbPhotos })
+  window.__annonceFutee = {
+    estPageVente, trouverPhotos, remplir, remplirMenus, formaterPrix, CHAMPS, synchroniser
   };
 
   function planifier() {

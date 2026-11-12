@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Annonce IA pour Vinted",
-  "version": "1.3.2",
-  "description": "Génère le titre, la description et le prix d'une annonce Vinted à partir des photos déjà ajoutées. Tu vérifies et tu publies toi-même.",
-  "permissions": ["storage"],
+  "name": "Annonce Futée",
+  "version": "1.5.0",
+  "description": "Prépare les photos et l'annonce Vinted. Tu vérifies, tu remplis le formulaire, et tu publies toi-même.",
+  "permissions": ["storage", "sidePanel"],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "host_permissions": [
     "https://api.anthropic.com/*",
     "https://*.vinted.net/*",
@@ -26,6 +29,6 @@
   ],
   "options_page": "options.html",
   "action": {
-    "default_title": "Annonce IA pour Vinted – Réglages"
+    "default_title": "Ouvrir Annonce Futée"
   }
 }

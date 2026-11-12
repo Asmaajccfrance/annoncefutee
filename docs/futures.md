@@ -27,9 +27,9 @@ Un compte Vinted n'est relié que si Vinted fournit une autorisation explicite (
 
 ## 4. Interface 2026
 
-Objectif : appliquer le design system déjà décrit (`docs/design-system.md`) à l'extension et à l'application mobile, sans changer le parcours qui fonctionne.
+Objectif : appliquer le design system (`docs/design-system.md`) au site, à l'extension et à l'application mobile, sans changer le parcours qui fonctionne.
 
-Jetons : encre `#1C1915`, encre douce `#5C564C`, papier `#F4F1EA`, surface `#FFFCF7`, pin `#1F6F66`, sable `#E7D7BE`, argile `#8C3A32`, mousse `#2C6B45`. Titres Fraunces, texte Outfit. L'extension reste une page de réglages et un panneau compact sur le formulaire. Le mobile consomme la même API. Cette couche visuelle arrive après la vérification de P2 dans Chrome.
+L'identité est violet `#6D28D9`, turquoise `#149388`, blanc, lavande `#F0EBFF` et anthracite `#242037`. La signature est « Des annonces plus malignes. » L'extension reste une page de réglages et un panneau compact sur le formulaire. Le mobile consomme la même API. Cette couche visuelle attend la fin des étapes techniques en cours.
 
 ## 5. Module partagé navigateurs
 

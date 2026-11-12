@@ -70,20 +70,21 @@
 
     <h2>Description</h2>
 
-    <label for="style">Longueur</label>
+    <label for="style">Densité</label>
     <select id="style">
-      <option value="court">Courte (2 lignes)</option>
-      <option value="normal">Normale (3 à 6 lignes)</option>
-      <option value="detaille">Détaillée (6 à 10 lignes)</option>
+      <option value="court">Courte</option>
+      <option value="normal">Normale</option>
+      <option value="detaille">Détaillée</option>
     </select>
+    <p class="aide">La description reste structurée. Ce choix change seulement la quantité de détails.</p>
 
     <label class="case" for="hashtags">
       <input id="hashtags" type="checkbox">
-      <span>Ajouter des hashtags à la fin de la description</span>
+      <span>Ajouter 3 à 5 hashtags à la fin</span>
     </label>
 
-    <label for="signature">Phrase ajoutée à chaque description (facultatif)</label>
-    <p class="aide">Par exemple : « Envoi rapide et soigné, maison non-fumeur. »</p>
+    <label for="signature">Formule d'expédition (facultatif)</label>
+    <p class="aide">Recopiée telle quelle, sans rien ajouter. Exemple : « Envoi depuis un domicile non-fumeur. » Sans formule, l'annonce ne promet aucune livraison.</p>
     <textarea id="signature" maxlength="300"></textarea>
 
     <h2>Prix</h2>

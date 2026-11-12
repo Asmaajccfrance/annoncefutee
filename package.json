@@ -2,6 +2,6 @@
   "name": "vinted-ia",
   "private": true,
   "scripts": {
-    "test": "node --test tests/core.test.js"
+    "test": "node --test tests/core.test.js tests/studio.test.js"
   }
 }

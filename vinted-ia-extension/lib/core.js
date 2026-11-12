@@ -42,12 +42,6 @@
     backendEmail: ''
   };
 
-  const LONGUEURS = {
-    court: '2 lignes maximum, l\'essentiel seulement',
-    normal: '3 à 6 lignes',
-    detaille: '6 à 10 lignes, avec les détails utiles à un acheteur (coupe, poches, fermetures, usage)'
-  };
-
   const CHAMPS = {
     titre: {
       selecteurs: ['[data-testid="title--input"]', 'input[name="title"]', 'input#title'],
@@ -120,9 +114,23 @@
   }
 
   function consigneDescription(r) {
-    const longueur = LONGUEURS[r.style] || LONGUEURS.normal;
-    const fin = r.hashtags ? 'suivie de 3 à 5 hashtags pertinents' : 'sans aucun hashtag';
-    return 'Description naturelle en français, ' + longueur + ', sans emoji en excès, ' + fin + '.';
+    const densite = {
+      court: 'phrases très courtes, sans retirer un défaut ni une information importante',
+      normal: 'trois à cinq puces, sans retirer un défaut ni une information importante',
+      detaille: 'puces un peu plus précises, sans retirer un défaut ni une information importante'
+    };
+    const tags = r.hashtags
+      ? 'Termine par 3 à 5 hashtags Vinted pertinents.'
+      : 'N\'ajoute aucun hashtag.';
+    return 'Description en français, phrases simples, naturelles et commerciales, facile à lire sur téléphone. '
+      + 'Ligne 1 : type d\'article, marque si connue, taille pour un vêtement, pointure pour une chaussure. '
+      + 'Puis une courte phrase sur la couleur et le style. '
+      + 'Puis des puces « • » (' + (densite[r.style] || densite.normal) + ') pour la coupe, les détails, la matière et la composition seulement s\'ils sont connus. '
+      + 'Puis une ligne qui commence par « État : », avec tous les défauts visibles. '
+      + 'Si le fonctionnement n\'est pas testé, écris « Fonctionnement non testé ». '
+      + 'Formule d\'expédition seulement si le vendeur en a donné une. Ne promets pas une livraison non confirmée. '
+      + tags
+      + ' Pas d\'astérisque, pas d\'emoji, pas d\'invention. Varie les tournures, sans reprendre la même phrase d\'une annonce à l\'autre.';
   }
 
   function hoteImageAutorise(url) {
@@ -377,9 +385,13 @@
         pageVinted = false;
       }
     }
+    const cheminPanneau = prefix + '/sidepanel.html';
+    const restePanneau = url.indexOf(cheminPanneau) === 0 ? url.slice(cheminPanneau.length) : null;
+    const panneau = restePanneau === '' || (typeof restePanneau === 'string' && (restePanneau[0] === '?' || restePanneau[0] === '#'));
     if (type === 'testKey' || type === 'authLogin' || type === 'authLogout' || type === 'getAccount') return interne;
-    if (type === 'openOptions') return interne || pageVinted;
-    if (type === 'generate' || type === 'fetchImage' || type === 'getPrefs') return pageVinted;
+    if (type === 'openOptions' || type === 'openSidePanel') return interne || pageVinted;
+    if (type === 'generate' || type === 'fetchImage') return pageVinted || panneau;
+    if (type === 'getPrefs') return pageVinted || panneau;
     return false;
   }
 
