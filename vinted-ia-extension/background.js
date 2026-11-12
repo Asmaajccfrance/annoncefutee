@@ -145,6 +145,8 @@ async function analyserViaBackend(reglages, images, precisions) {
   try {
     reponse = await fetch(url, {
       method: 'POST',
+      credentials: 'omit',
+      redirect: 'error',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json',
@@ -172,6 +174,8 @@ async function connecterCompte(email, password, backendUrl) {
   try {
     reponse = await fetch(url, {
       method: 'POST',
+      credentials: 'omit',
+      redirect: 'error',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ email: email, password: password, device_name: 'chrome' })
     });
@@ -195,6 +199,8 @@ async function deconnecterCompte() {
     try {
       await fetch(IA.urlApi(reglages.backendUrl, '/api/v1/auth/logout'), {
         method: 'POST',
+        credentials: 'omit',
+        redirect: 'error',
         headers: { accept: 'application/json', authorization: 'Bearer ' + reglages.backendToken }
       });
     } catch (e) {
@@ -210,6 +216,8 @@ async function lireCompte() {
   if (IA.choisirMoteur(reglages) !== 'backend') return { connected: false, email: '' };
   try {
     const reponse = await fetch(IA.urlApi(reglages.backendUrl, '/api/v1/me'), {
+      credentials: 'omit',
+      redirect: 'error',
       headers: { accept: 'application/json', authorization: 'Bearer ' + reglages.backendToken }
     });
     const json = await lireJson(reponse);

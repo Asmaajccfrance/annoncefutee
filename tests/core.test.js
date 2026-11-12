@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const IA = require('../vinted-ia-extension/lib/core.js');
+const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../vinted-ia-extension/manifest.json'), 'utf8'));
 
 const EXT = 'abcdefghijklmnop';
 
@@ -190,19 +193,75 @@ test('une session serveur est prioritaire et ne transmet jamais la clé Claude',
 });
 
 test('seuls le serveur local et l\'adresse officielle peuvent recevoir la session', () => {
-  assert.equal(IA.API_OFFICIELLE, '');
+  assert.equal(IA.API_OFFICIELLE, 'https://annoncefutee.fr');
+  assert.equal(IA.REGLAGES_DEFAUT.backendUrl, 'https://annoncefutee.fr');
+  assert.equal(
+    IA.urlApi('https://annoncefutee.fr/autre?jeton=1', '/api/v1/listings/analyze'),
+    'https://annoncefutee.fr/api/v1/listings/analyze'
+  );
+  assert.equal(IA.urlApi('https://AnnonceFutee.fr:443', '/api/v1/me'), 'https://annoncefutee.fr/api/v1/me');
   assert.equal(
     IA.urlApi('http://127.0.0.1:8000/autre', '/api/v1/listings/analyze'),
     'http://127.0.0.1:8000/api/v1/listings/analyze'
   );
   assert.equal(IA.urlApi('http://localhost:8000', '/api/v1/me'), 'http://localhost:8000/api/v1/me');
-  assert.throws(() => IA.urlApi('https://api.exemple.fr/ignored', '/api/v1/me'), /non autorisée/);
-  assert.throws(() => IA.urlApi('https://api.exemple.fr.evil.com', '/api/v1/me'), /non autorisée/);
-  assert.throws(() => IA.urlApi('http://127.0.0.1:8001', '/api/v1/me'), /non autorisée/);
-  assert.throws(() => IA.urlApi('http://api.exemple.fr', '/api/v1/me'), /non autorisée/);
-  assert.throws(() => IA.urlApi('https://user:secret@127.0.0.1:8000', '/api/v1/me'), /non autorisée/);
+  assert.equal(IA.assainirReglages({}).backendUrl, 'https://annoncefutee.fr');
+  assert.equal(IA.assainirReglages({ backendUrl: 'https://annoncefutee.fr/api/v1' }).backendUrl, 'https://annoncefutee.fr');
+
+  const refus = [
+    'http://annoncefutee.fr',
+    'https://www.annoncefutee.fr',
+    'https://api.annoncefutee.fr',
+    'https://annoncefutee.fr.evil.com',
+    'https://evil-annoncefutee.fr',
+    'https://annoncefutee.fr:8443',
+    'https://user:secret@annoncefutee.fr',
+    'https://annoncefutee.fr@evil.com',
+    'http://127.0.0.1:8001',
+    'http://api.exemple.fr',
+    'https://api.exemple.fr/ignored',
+    'https://api.exemple.fr.evil.com',
+    'https://user:secret@127.0.0.1:8000'
+  ];
+  for (const url of refus) {
+    assert.throws(() => IA.urlApi(url, '/api/v1/me'), /non autorisée/, url);
+  }
   assert.equal(IA.assainirReglages({ backendUrl: 'https://evil.example' }).backendUrl, '');
+  assert.equal(IA.assainirReglages({ backendUrl: 'http://annoncefutee.fr' }).backendUrl, '');
+  assert.equal(IA.assainirReglages({ backendUrl: 'https://www.annoncefutee.fr' }).backendUrl, '');
   assert.equal(IA.choisirMoteur({ backendToken: 'jeton', backendUrl: 'https://evil.example', apiKey: 'sk-ant-test' }), 'backend');
+});
+
+test('le jeton ne quitte pas l\'origine contrôlée', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../vinted-ia-extension/background.js'), 'utf8');
+  const appel = source.slice(source.indexOf('async function appelerApi'), source.indexOf('async function generer'));
+  assert.equal(appel.includes('backendToken'), false);
+  assert.equal(appel.includes('authorization'), false);
+  assert.equal((source.match(/authorization: 'Bearer ' \+ reglages\.backendToken/g) || []).length, 3);
+  assert.equal((source.match(/redirect: 'error'/g) || []).length, 4);
+  assert.equal((source.match(/credentials: 'omit'/g) || []).length, 5);
+  assert.equal(source.includes("if (IA.choisirMoteur(reglages) === 'backend')"), true);
+});
+
+test('le manifeste n\'accorde le serveur qu\'à l\'origine officielle et au développement local', () => {
+  assert.deepEqual(manifest.permissions, ['storage']);
+  assert.equal(Object.prototype.hasOwnProperty.call(manifest, 'optional_host_permissions'), false);
+  assert.deepEqual(manifest.host_permissions, [
+    'https://api.anthropic.com/*',
+    'https://*.vinted.net/*',
+    'https://vinted.net/*',
+    'https://*.vinted.fr/*',
+    'https://vinted.fr/*',
+    'http://127.0.0.1:8000/*',
+    'http://localhost:8000/*',
+    IA.API_OFFICIELLE + '/*'
+  ]);
+  assert.equal(manifest.host_permissions.includes('https://*/*'), false);
+  assert.equal(manifest.host_permissions.includes('http://annoncefutee.fr/*'), false);
+  assert.equal(manifest.host_permissions.includes('https://www.annoncefutee.fr/*'), false);
+  assert.equal(manifest.host_permissions.includes('https://*.annoncefutee.fr/*'), false);
+  assert.equal(manifest.content_scripts.length, 1);
+  assert.deepEqual(manifest.content_scripts[0].matches, ['https://www.vinted.fr/*']);
 });
 
 test('la règle de prix locale s\'applique à la réponse du serveur', () => {

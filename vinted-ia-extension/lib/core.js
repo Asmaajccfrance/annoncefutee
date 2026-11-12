@@ -10,9 +10,8 @@
   const MAX_PHOTOS = 5;
   const MAX_IMAGE_CHARS = 1500000;
   const MAX_PRECISIONS = 300;
-  // Origine HTTPS de production, exactement. Vide tant que le domaine n'est pas le nôtre :
-  // le jeton ne peut alors atteindre que le serveur local.
-  const API_OFFICIELLE = '';
+  // Origine HTTPS de production, caractère pour caractère, sans chemin ni barre finale.
+  const API_OFFICIELLE = 'https://annoncefutee.fr';
 
   const ETATS = [
     'Neuf avec étiquette',
@@ -38,7 +37,7 @@
     prixAjustement: 0,
     prixArrondi: 1,
     autoGenerer: false,
-    backendUrl: 'http://127.0.0.1:8000',
+    backendUrl: API_OFFICIELLE,
     backendToken: '',
     backendEmail: ''
   };
@@ -241,7 +240,7 @@
 
   function assainirUrlBackend(v) {
     const s = chaine(typeof v === 'string' ? v : '', 200);
-    if (!s) return 'http://127.0.0.1:8000';
+    if (!s) return API_OFFICIELLE;
     try {
       return new URL(urlApi(s, '/')).origin;
     } catch (e) {
