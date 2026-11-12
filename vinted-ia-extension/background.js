@@ -155,7 +155,9 @@ async function analyserViaBackend(reglages, images, precisions) {
       body: JSON.stringify(IA.corpsAnalyse(photos, precisions, reglages))
     });
   } catch (e) {
-    throw new Error('Connexion impossible au serveur. Vérifie qu\'il est démarré.');
+    const err = new Error('Connexion impossible au serveur. Vérifie qu\'il est démarré.');
+    err.code = 'NETWORK';
+    throw err;
   }
   const json = await lireJson(reponse);
   if (reponse.status === 401) {
@@ -164,7 +166,11 @@ async function analyserViaBackend(reglages, images, precisions) {
     err.code = 'NO_KEY';
     throw err;
   }
-  if (!reponse.ok || !json || !json.data) throw new Error(messageServeur(reponse, json));
+  if (!reponse.ok || !json || !json.data) {
+    const err = new Error(messageServeur(reponse, json));
+    err.code = 'HTTP_' + reponse.status;
+    throw err;
+  }
   return IA.preparerAnnonceServeur(json.data, reglages);
 }
 
@@ -180,10 +186,16 @@ async function connecterCompte(email, password, backendUrl) {
       body: JSON.stringify({ email: email, password: password, device_name: 'chrome' })
     });
   } catch (e) {
-    throw new Error('Connexion impossible au serveur. Vérifie qu\'il est démarré.');
+    const err = new Error('Connexion impossible au serveur. Vérifie qu\'il est démarré.');
+    err.code = 'NETWORK';
+    throw err;
   }
   const json = await lireJson(reponse);
-  if (!reponse.ok || !json || !json.token) throw new Error(messageServeur(reponse, json));
+  if (!reponse.ok || !json || !json.token) {
+    const err = new Error(messageServeur(reponse, json));
+    err.code = 'HTTP_' + reponse.status;
+    throw err;
+  }
   const propre = IA.assainirReglages({ backendUrl: backendUrl, backendEmail: email, backendToken: json.token });
   await chrome.storage.local.set({
     backendUrl: propre.backendUrl,
@@ -225,7 +237,8 @@ async function lireCompte() {
       await chrome.storage.local.set({ backendToken: '' });
       return { connected: false, email: '' };
     }
-    if (!reponse.ok || !json || !json.user) return { connected: true, email: reglages.backendEmail, credits: null };
+    if (reponse.status === 403) return { connected: true, email: reglages.backendEmail, credits: null, ferme: true };
+    if (!reponse.ok || !json || !json.user) return { connected: true, email: reglages.backendEmail, credits: null, indisponible: true };
     return { connected: true, email: json.user.email, credits: json.credits || null };
   } catch (e) {
     return { connected: true, email: reglages.backendEmail, credits: null, offline: true };

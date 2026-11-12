@@ -103,109 +103,93 @@
     });
   }
 
-  async function notifierChangementPhotos(photos) {
-    const maintenant = Date.now();
-    const hash = calculerHash(photos);
-    
-    // Éviter les notifications en double (debounce)
-    if (hash === dernieresPhotosHash && maintenant - dernierEnvoi < 2000) {
-      return;
-    }
-    
-    dernieresPhotosHash = hash;
-    dernierEnvoi = maintenant;
+  // Une seule vérification en attente à la fois : plusieurs mutations rapprochées
+  // (ajout de 3 photos d'affilée) ne produisent qu'une seule notification.
+  let minuteurVerif = null;
+  function planifierVerification(delai) {
+    clearTimeout(minuteurVerif);
+    minuteurVerif = setTimeout(verifierPhotos, delai);
+  }
 
-    // Notifier le background/sidepanel
+  function notifierChangementPhotos(photos, hash) {
+    dernieresPhotosHash = hash;
+    dernierEnvoi = Date.now();
+    majBouton(photos.length, analyseEnCours);
     envoyer({
       type: 'photosChanged',
       count: photos.length,
       hash: hash,
       pageUrl: location.href,
-      timestamp: maintenant
+      timestamp: dernierEnvoi
     });
   }
 
   // ---------- Observation automatique du DOM ----------
 
+  function gererChangementFichier(e) {
+    if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'file') planifierVerification(600);
+  }
+
+  function gererDrop(e) {
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) planifierVerification(600);
+  }
+
+  let zoneObservee = null;
+
+  function mutationConcerneImage(mutations) {
+    for (const m of mutations) {
+      if (m.type === 'attributes') {
+        if (m.target.tagName === 'IMG') return true;
+        continue;
+      }
+      for (const liste of [m.addedNodes, m.removedNodes]) {
+        for (const node of liste) {
+          if (node.nodeType !== 1) continue;
+          if (node.tagName === 'IMG' || (node.querySelector && node.querySelector('img'))) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function demarrerObservation() {
     if (observateurActif || !estPageVente()) return;
+    zoneObservee = document.querySelector('main') || document.body;
 
-    const zone = document.querySelector('main') || document.body;
-    
     observateurActif = new MutationObserver((mutations) => {
-      // Vérifier si les mutations concernent des images
-      let peutAvoirPhotos = false;
-      
-      for (const mutation of mutations) {
-        // Nouvel élément ajouté
-        if (mutation.addedNodes.length > 0) {
-          for (const node of mutation.addedNodes) {
-            if (node.nodeType === 1) {
-              if (node.tagName === 'IMG' || node.querySelector?.('img')) {
-                peutAvoirPhotos = true;
-                break;
-              }
-            }
-          }
-        }
-        // Attribut src changé sur une image
-        if (mutation.type === 'attributes' && mutation.attributeName === 'src') {
-          if (mutation.target.tagName === 'IMG') {
-            peutAvoirPhotos = true;
-          }
-        }
-        if (peutAvoirPhotos) break;
-      }
-
-      if (peutAvoirPhotos) {
-        // Délai pour laisser le DOM se stabiliser
-        setTimeout(verifierPhotos, 300);
-      }
+      if (mutationConcerneImage(mutations)) planifierVerification(400);
     });
-
-    observateurActif.observe(zone, {
+    observateurActif.observe(zoneObservee, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['src']
     });
+    zoneObservee.addEventListener('change', gererChangementFichier, true);
+    zoneObservee.addEventListener('drop', gererDrop, true);
 
-    // Écouter aussi les événements de fichiers
-    zone.addEventListener('change', gererChangementFichier, true);
-    zone.addEventListener('drop', gererDrop, true);
-
-    // Vérification initiale
-    setTimeout(verifierPhotos, 500);
+    planifierVerification(500);
   }
 
   function arreterObservation() {
+    clearTimeout(minuteurVerif);
     if (observateurActif) {
       observateurActif.disconnect();
       observateurActif = null;
     }
-  }
-
-  function gererChangementFichier(e) {
-    if (e.target?.tagName === 'INPUT' && e.target.type === 'file') {
-      setTimeout(verifierPhotos, 500);
+    if (zoneObservee) {
+      zoneObservee.removeEventListener('change', gererChangementFichier, true);
+      zoneObservee.removeEventListener('drop', gererDrop, true);
+      zoneObservee = null;
     }
   }
 
-  function gererDrop(e) {
-    if (e.dataTransfer?.files?.length > 0) {
-      setTimeout(verifierPhotos, 500);
-    }
-  }
-
+  // Ne notifie que si l'ensemble des photos a réellement changé (ajout, retrait, remplacement).
   function verifierPhotos() {
     if (!estPageVente()) return;
-    
     const photos = trouverPhotosVinted();
     const hash = calculerHash(photos);
-    
-    if (hash !== dernieresPhotosHash) {
-      notifierChangementPhotos(photos);
-    }
+    if (hash !== dernieresPhotosHash) notifierChangementPhotos(photos, hash);
   }
 
   // ---------- Conversion en base64 ----------
@@ -291,8 +275,20 @@
     el.blur();
   }
 
-  function remplir(annonce) {
-    const fait = { titre: false, description: false, prix: false };
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function memeValeur(cle, lue, voulue) {
+    if (cle === 'prix') {
+      const a = parseFloat(String(lue).replace(',', '.').replace(/[^\d.]/g, ''));
+      const b = parseFloat(String(voulue).replace(',', '.').replace(/[^\d.]/g, ''));
+      return isFinite(a) && isFinite(b) && a === b;
+    }
+    return String(lue).trim() === String(voulue).trim();
+  }
+
+  // États par champ : 'rempli' (relu et confirmé), 'echec', 'introuvable', 'absent' (rien à écrire).
+  async function remplir(annonce) {
+    const etats = { titre: 'absent', description: 'absent', prix: 'absent' };
     const valeurs = {
       titre: annonce.titre || '',
       description: annonce.description || '',
@@ -300,20 +296,22 @@
     };
     for (const cle of Object.keys(valeurs)) {
       if (!valeurs[cle]) continue;
+      etats[cle] = 'introuvable';
       try {
         const el = CHAMPS[cle]();
-        if (el && !el.disabled && !el.readOnly) {
-          ecrire(el, valeurs[cle]);
-          fait[cle] = true;
-        }
-      } catch (e) { /* champ introuvable */ }
+        if (!el || el.disabled || el.readOnly) continue;
+        ecrire(el, valeurs[cle]);
+        await pause(150);
+        const relu = CHAMPS[cle]() || el;
+        etats[cle] = memeValeur(cle, relu.value, valeurs[cle]) ? 'rempli' : 'echec';
+      } catch (e) {
+        etats[cle] = 'echec';
+      }
     }
-    return fait;
+    return etats;
   }
 
   // ---------- Menus déroulants ----------
-
-  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function visible(el) {
     const r = el.getBoundingClientRect();
@@ -402,7 +400,9 @@
     for (const [cle, valeurs] of essais) {
       try {
         resultat[cle] = await choisirDansMenu(MENUS[cle], valeurs);
-      } catch (e) { /* menu inattendu */ }
+      } catch (e) {
+        resultat[cle] = 'echec';
+      }
     }
     return resultat;
   }
@@ -529,7 +529,7 @@
           repondre({ ok: false, error: 'Ouvre la page Vinted « Vendre un article ».' });
           return;
         }
-        const fait = remplir(data);
+        const fait = await remplir(data);
         const menus = await remplirMenus(data);
         repondre({ ok: true, fait: fait, menus: menus });
       })();
@@ -593,16 +593,8 @@
     verifierPhotos, collecterPhotosBase64
   };
 
-  function planifier() {
-    synchroniser();
-    
-    // Sur page de vente, vérifier périodiquement (backup de l'observateur)
-    if (estPageVente()) {
-      const photos = trouverPhotosVinted();
-      majBouton(photos.length, analyseEnCours);
-    }
-    
-    setTimeout(planifier, estPageVente() ? 1500 : 3000);
-  }
-  planifier();
+  // Suivi de la navigation (page Vinted en application monopage) : compare seulement le chemin.
+  setInterval(synchroniser, 1000);
+  synchroniser();
+
 })();

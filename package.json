@@ -2,6 +2,9 @@
   "name": "vinted-ia",
   "private": true,
   "scripts": {
-    "test": "node --test tests/core.test.js tests/studio.test.js"
+    "test": "node --test tests/core.test.js tests/studio.test.js tests/sidepanel.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
   }
 }

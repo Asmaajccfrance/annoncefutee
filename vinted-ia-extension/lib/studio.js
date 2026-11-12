@@ -640,6 +640,20 @@
     return mettreAJourAlbum(albumId, nouveau);
   }
 
+  // Applique n'importe quelle retouche connue (voir appliquerOperation) par ID
+  function avecOperationParId(albumId, photoId, op) {
+    const album = albumsParId.get(albumId);
+    if (!album) return null;
+    return mettreAJourAlbum(albumId, avecOperation(album, photoId, op));
+  }
+
+  // Annule la dernière retouche par ID
+  function annulerParId(albumId, photoId) {
+    const album = albumsParId.get(albumId);
+    if (!album) return null;
+    return mettreAJourAlbum(albumId, annuler(album, photoId));
+  }
+
   // Demande mannequin par ID (actuellement retourne une erreur car non configuré)
   function demanderMannequinParId(albumId, photoId) {
     const album = albumsParId.get(albumId);
@@ -686,6 +700,9 @@
     redresserParId: redresserParId,
     reglerParId: reglerParId,
     retirerFondParId: retirerFondParId,
+    avecOperationParId: avecOperationParId,
+    annulerParId: annulerParId,
+    rendrePhoto: rendre,
     demanderMannequinParId: demanderMannequinParId
   };
 });

@@ -15,7 +15,7 @@
       </svg>
       <div>
         <h1>Annonce Futée</h1>
-        <p class="slogan">Des annonces plus malignes</p>
+        <p class="slogan">Des annonces plus malignes · v<span id="version">?</span></p>
       </div>
     </div>
     <div id="credits" class="credits" hidden>
@@ -51,6 +51,26 @@
 
     <!-- TABLEAU DE BORD -->
     <section id="dashboard" class="section">
+      <div class="card live" id="card-live">
+        <div class="live-entete">
+          <h2>Formulaire Vinted</h2>
+          <span id="live-badge" class="live-badge">Aucune photo</span>
+        </div>
+        <div id="live-photos" class="live-photos"></div>
+        <ol id="live-etapes" class="live-etapes" hidden>
+          <li data-etape="photos">Photos détectées</li>
+          <li data-etape="retouches">Retouches</li>
+          <li data-etape="generation">Génération</li>
+          <li data-etape="remplissage">Remplissage</li>
+        </ol>
+        <p id="live-message" class="live-message">Ouvre « Vendre un article » sur Vinted et ajoute une photo : elle apparaît ici automatiquement.</p>
+        <div id="live-champs" class="live-champs"></div>
+        <div class="ligne">
+          <button type="button" id="live-generer" class="btn principal" hidden>Générer l'annonce</button>
+          <button type="button" id="live-remplir" class="btn secondaire" hidden>Remplir le formulaire</button>
+        </div>
+      </div>
+
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-val" id="stat-brouillons">0</div>
@@ -307,6 +327,9 @@
           <input type="checkbox" id="autoRemplir" checked>
           Remplir automatiquement le formulaire après génération
         </label>
+        <label for="limiteAuto">Analyses automatiques maximum par jour</label>
+        <input type="number" id="limiteAuto" min="1" max="100" value="10">
+        <p class="aide">Une seule analyse par ensemble de photos. Chaque analyse consomme des crédits. Rien n'est jamais publié automatiquement.</p>
       </div>
 
       <div class="card">
@@ -337,8 +360,12 @@
       </div>
 
       <div class="card">
-        <h2>Clé Claude (optionnel)</h2>
-        <p class="aide">Uniquement si tu n'as pas de compte serveur.</p>
+        <h2>Mode de transition Claude (optionnel)</h2>
+        <p class="aide">Uniquement si tu n'as pas de compte serveur. Désactivé par défaut : sans ton accord explicite ci-dessous, la clé n'est jamais utilisée.</p>
+        <label class="checkbox-label">
+          <input type="checkbox" id="claudeExplicite">
+          Utiliser ma clé Claude quand aucun compte serveur n'est connecté
+        </label>
         <label for="apiKey">Clé API</label>
         <input type="password" id="apiKey" placeholder="sk-ant-...">
         <button type="button" id="tester-cle" class="btn secondaire">Tester la clé</button>

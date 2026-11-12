@@ -935,3 +935,34 @@ textarea {
 .chargement {
   animation: pulse 1.5s infinite;
 }
+
+/* CARTE FORMULAIRE VINTED (détection automatique) */
+.live-entete { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.live-entete h2 { margin: 0; }
+.live-badge {
+  padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
+  background: var(--gris-200); color: var(--gris-500);
+}
+.live-badge.actif { background: var(--lavande); color: var(--violet); }
+.live-badge.ok { background: var(--vert-pale); color: var(--vert); }
+.live-badge.erreur { background: var(--rouge-pale); color: var(--rouge); }
+.live-photos { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.live-photos img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; background: var(--gris-200); }
+.live-etapes { list-style: none; display: flex; gap: 6px; padding: 0; margin: 0 0 10px; flex-wrap: wrap; }
+.live-etapes li {
+  font-size: 0.72rem; padding: 3px 8px; border-radius: 10px;
+  background: var(--gris-100); color: var(--gris-500); border: 1px solid var(--gris-200);
+}
+.live-etapes li.en-cours { background: var(--lavande); color: var(--violet); border-color: var(--violet); }
+.live-etapes li.fait { background: var(--vert-pale); color: var(--vert); border-color: transparent; }
+.live-etapes li.erreur { background: var(--rouge-pale); color: var(--rouge); border-color: transparent; }
+.live-message { margin: 0 0 10px; font-size: 0.85rem; color: var(--gris-500); }
+.live-message.erreur { color: var(--rouge); font-weight: 500; }
+.live-champs { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.champ-ligne { display: flex; justify-content: space-between; gap: 8px; font-size: 0.8rem; padding: 4px 8px; border-radius: 6px; background: var(--gris-100); }
+.champ-ligne .champ-nom { font-weight: 600; }
+.champ-ligne .champ-etat { text-align: right; }
+.champ-ligne.rempli .champ-etat, .champ-ligne.deja .champ-etat { color: var(--vert); }
+.champ-ligne.echec .champ-etat { color: var(--rouge); }
+.champ-ligne.a_choisir .champ-etat, .champ-ligne.manuel .champ-etat { color: var(--violet); }
+.champ-ligne.absent .champ-etat { color: var(--gris-500); }

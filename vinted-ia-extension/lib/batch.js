@@ -135,29 +135,50 @@
     };
   }
 
-  // Amélioration automatique d'une photo
-  // Retourne un tableau d'opérations à appliquer (ne modifie pas la photo)
+  // Amélioration automatique d'une photo.
+  // `photo.source` est une image de pixels { width, height, data } (voir Studio.creerImage).
+  // Retourne les opérations adaptées (types reconnus par Studio.avecOperation) :
+  // aucune si la photo est déjà correcte. Ne modifie jamais la photo.
   function ameliorerPhotoAuto(photo, Studio) {
-    if (!photo || !photo.source) return [];
-    
+    const im = photo && photo.source;
+    if (!im || !im.data || !im.width || !im.height) return [];
+
     const operations = [];
-    
+
     try {
-      // 1. Détecter et corriger l'inclinaison
-      const angle = Studio.angleRedressement(photo.source);
-      if (Math.abs(angle) > 0.5) {
-        operations.push({ type: 'redresser', degres: angle });
+      const angle = Studio.angleRedressement(im);
+      if (isFinite(angle) && Math.abs(angle) >= 1.5 && Math.abs(angle) <= 15) {
+        operations.push({ type: 'redresser', degres: Math.round(angle * 2) / 2 });
       }
-      
-      // 2. Légère amélioration de luminosité/contraste par défaut
-      // L'analyse d'image complète nécessiterait un canvas, on applique des valeurs modérées
-      operations.push({ type: 'regler', luminosite: 5, contraste: 8, saturation: 0 });
-      
-    } catch (e) {
-      // Si l'analyse échoue, retourner des opérations par défaut
-      console.warn('[Batch] Erreur analyse photo:', e);
+    } catch (e) { /* redressement impossible : on continue sans */ }
+
+    // Luminosité et contraste mesurés sur un échantillon de pixels
+    const total = im.data.length / 4;
+    const pas = Math.max(1, Math.floor(total / 20000));
+    let somme = 0;
+    let n = 0;
+    let min = 255;
+    let max = 0;
+    for (let i = 0; i < total; i += pas) {
+      const p = i * 4;
+      const lum = im.data[p] * 0.2126 + im.data[p + 1] * 0.7152 + im.data[p + 2] * 0.0722;
+      somme += lum;
+      n += 1;
+      if (lum < min) min = lum;
+      if (lum > max) max = lum;
     }
-    
+    if (n === 0) return operations;
+    const moyenne = somme / n;
+
+    let luminosite = 0;
+    let contraste = 0;
+    if (moyenne < 100) luminosite = Math.min(25, Math.round((128 - moyenne) * 0.3));
+    else if (moyenne > 200) luminosite = Math.max(-15, Math.round((128 - moyenne) * 0.2));
+    if (max - min < 150) contraste = Math.min(20, Math.round((200 - (max - min)) * 0.1));
+
+    if (luminosite || contraste) {
+      operations.push({ type: 'reglages', luminosite: luminosite, contraste: contraste, saturation: 0 });
+    }
     return operations;
   }
 
