@@ -83,14 +83,15 @@
 
   // ========== DASHBOARD ==========
   function rafraichirDashboard() {
-    const stats = Batch.calculerStatistiques(brouillons);
-    $('#stat-brouillons').textContent = stats.brouillons;
-    $('#stat-prets').textContent = stats.prets;
-    $('#stat-valeur').textContent = stats.valeurTotale.toFixed(0) + ' €';
+    const liste = Array.isArray(brouillons) ? brouillons : [];
+    const stats = Batch.calculerStatistiques(liste);
+    $('#stat-brouillons').textContent = stats.brouillons || 0;
+    $('#stat-prets').textContent = stats.prets || 0;
+    $('#stat-valeur').textContent = (stats.valeurTotale || 0).toFixed(0) + ' €';
     $('#stat-credits').textContent = credits !== null ? credits : '--';
 
     // Afficher activité récente
-    const recents = Batch.trierBrouillons(brouillons, 'date_desc').slice(0, 3);
+    const recents = Batch.trierBrouillons(liste, 'date_desc').slice(0, 3);
     const listeEl = $('#activite-liste');
     const videEl = $('#activite-vide');
     listeEl.innerHTML = '';
@@ -299,12 +300,12 @@
     for (const photo of photos) {
       try {
         const ops = Batch.ameliorerPhotoAuto(photo, Studio);
-        if (ops.length > 0) {
+        if (Array.isArray(ops) && ops.length > 0) {
           for (const op of ops) {
-            if (op.type === 'redresser') {
+            if (op.type === 'redresser' && op.degres) {
               Studio.redresser(albumActif.id, photo.id, op.degres);
             } else if (op.type === 'regler') {
-              Studio.regler(albumActif.id, photo.id, op.luminosite, op.contraste, 0);
+              Studio.regler(albumActif.id, photo.id, op.luminosite || 0, op.contraste || 0, op.saturation || 0);
             }
           }
           nbAmeliorees++;

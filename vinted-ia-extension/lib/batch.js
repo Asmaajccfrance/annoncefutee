@@ -136,65 +136,43 @@
   }
 
   // Amélioration automatique d'une photo
+  // Retourne un tableau d'opérations à appliquer (ne modifie pas la photo)
   function ameliorerPhotoAuto(photo, Studio) {
-    if (!photo || !photo.source) return photo;
+    if (!photo || !photo.source) return [];
     
-    let operations = [];
+    const operations = [];
     
-    // 1. Détecter et corriger l'inclinaison
-    const angle = Studio.angleRedressement(photo.source);
-    if (Math.abs(angle) > 0.5) {
-      operations.push({ type: 'redresser', degres: angle });
+    try {
+      // 1. Détecter et corriger l'inclinaison
+      const angle = Studio.angleRedressement(photo.source);
+      if (Math.abs(angle) > 0.5) {
+        operations.push({ type: 'redresser', degres: angle });
+      }
+      
+      // 2. Légère amélioration de luminosité/contraste par défaut
+      // L'analyse d'image complète nécessiterait un canvas, on applique des valeurs modérées
+      operations.push({ type: 'regler', luminosite: 5, contraste: 8, saturation: 0 });
+      
+    } catch (e) {
+      // Si l'analyse échoue, retourner des opérations par défaut
+      console.warn('[Batch] Erreur analyse photo:', e);
     }
     
-    // 2. Améliorer légèrement la luminosité et le contraste
-    // Calcul de la luminosité moyenne
-    let somme = 0;
-    const data = photo.source.data;
-    for (let i = 0; i < data.length; i += 4) {
-      somme += data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
-    }
-    const moyenne = somme / (data.length / 4);
-    
-    let lumAjust = 0;
-    let contAjust = 0;
-    
-    // Photo trop sombre : éclaircir
-    if (moyenne < 100) {
-      lumAjust = Math.min(25, Math.round((128 - moyenne) * 0.3));
-    }
-    // Photo trop claire : assombrir légèrement
-    else if (moyenne > 200) {
-      lumAjust = Math.max(-15, Math.round((128 - moyenne) * 0.2));
-    }
-    
-    // Contraste faible : augmenter
-    let min = 255, max = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      const lum = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
-      if (lum < min) min = lum;
-      if (lum > max) max = lum;
-    }
-    const contraste = max - min;
-    if (contraste < 150) {
-      contAjust = Math.min(20, Math.round((200 - contraste) * 0.1));
-    }
-    
-    if (lumAjust || contAjust) {
-      operations.push({ type: 'reglages', luminosite: lumAjust, contraste: contAjust, saturation: 0 });
-    }
-    
-    return {
-      ...photo,
-      operations: photo.operations.concat(operations)
-    };
+    return operations;
   }
 
   // Améliorer toutes les photos d'un article
   function ameliorerArticleAuto(article, Studio) {
+    if (!article || !article.photos) return article;
     return {
       ...article,
-      photos: article.photos.map((photo) => ameliorerPhotoAuto(photo, Studio)),
+      photos: article.photos.map((photo) => {
+        const ops = ameliorerPhotoAuto(photo, Studio);
+        return {
+          ...photo,
+          operations: (photo.operations || []).concat(ops)
+        };
+      }),
       dateModification: Date.now()
     };
   }
@@ -295,7 +273,11 @@
   }
 
   function filtrerBrouillons(brouillons, filtres) {
+    if (!Array.isArray(brouillons)) return [];
+    if (!filtres) return brouillons;
+    
     return brouillons.filter((b) => {
+      if (!b) return false;
       if (filtres.statut && b.statut !== filtres.statut) return false;
       if (filtres.plateforme && b.plateforme !== filtres.plateforme) return false;
       if (filtres.recherche) {
@@ -311,18 +293,19 @@
   }
 
   function trierBrouillons(brouillons, tri) {
+    if (!Array.isArray(brouillons)) return [];
     const copie = brouillons.slice();
     switch (tri) {
       case 'date_desc':
-        return copie.sort((a, b) => (b.dateModification || 0) - (a.dateModification || 0));
+        return copie.sort((a, b) => ((b && b.dateModification) || 0) - ((a && a.dateModification) || 0));
       case 'date_asc':
-        return copie.sort((a, b) => (a.dateModification || 0) - (b.dateModification || 0));
+        return copie.sort((a, b) => ((a && a.dateModification) || 0) - ((b && b.dateModification) || 0));
       case 'prix_desc':
-        return copie.sort((a, b) => (b.prix || 0) - (a.prix || 0));
+        return copie.sort((a, b) => ((b && b.prix) || 0) - ((a && a.prix) || 0));
       case 'prix_asc':
-        return copie.sort((a, b) => (a.prix || 0) - (b.prix || 0));
+        return copie.sort((a, b) => ((a && a.prix) || 0) - ((b && b.prix) || 0));
       case 'titre':
-        return copie.sort((a, b) => (a.titre || '').localeCompare(b.titre || ''));
+        return copie.sort((a, b) => ((a && a.titre) || '').localeCompare((b && b.titre) || ''));
       default:
         return copie;
     }
@@ -330,12 +313,17 @@
 
   // Statistiques
   function calculerStatistiques(brouillons) {
+    if (!Array.isArray(brouillons)) {
+      return { total: 0, brouillons: 0, prets: 0, archives: 0, prixMoyen: 0, valeurTotale: 0 };
+    }
+    
     const total = brouillons.length;
     const parStatut = { brouillon: 0, pret: 0, archive: 0 };
     let totalPrix = 0;
     let comptePrix = 0;
 
     for (const b of brouillons) {
+      if (!b) continue;
       parStatut[b.statut] = (parStatut[b.statut] || 0) + 1;
       if (b.prix && b.prix > 0) {
         totalPrix += b.prix;
