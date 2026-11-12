@@ -145,6 +145,14 @@
 
     const operations = [];
 
+    // Recadrage intelligent : seulement des bords parfaitement unis (le sujet et ses défauts ne sont jamais
+    // touchés). Si aucun bord uni n'est trouvé, l'opération n'est pas ajoutée.
+    try {
+      const essai = Studio.ajouterPhoto(Studio.creerAlbum(), im, 'essai');
+      Studio.avecOperation(essai, essai.photos[0].id, { type: 'recadrerAuto' });
+      operations.push({ type: 'recadrerAuto' });
+    } catch (e) { /* pas de bord uni à rogner */ }
+
     try {
       const angle = Studio.angleRedressement(im);
       if (isFinite(angle) && Math.abs(angle) >= 1.5 && Math.abs(angle) <= 15) {

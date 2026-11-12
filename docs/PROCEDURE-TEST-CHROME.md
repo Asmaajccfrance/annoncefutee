@@ -1,5 +1,7 @@
 # Procédure sécurisée de test : Chrome → Laravel → OpenAI
 
+> Depuis la version 1.6.0, le compte de test peut être réservé côté serveur sans ouvrir `CLIENT_API` : voir `docs/AUTOMATISATION-COMPTE-TEST.md`. Les étapes « ouvrir `CLIENT_API=true` » ci-dessous ne sont alors plus nécessaires pour ce compte. Le budget OpenAI reste à autoriser explicitement avant toute analyse réelle.
+
 Cette procédure vérifie le parcours réel avec **l'unique compte existant**. Elle n'ouvre pas les inscriptions publiques, ne crée aucun compte et ne dépense rien sans accord explicite à chaque étape payante.
 
 ## État vérifié le 12 novembre 2026

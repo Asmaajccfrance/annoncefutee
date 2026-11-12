@@ -390,7 +390,7 @@
     const panneau = restePanneau === '' || (typeof restePanneau === 'string' && (restePanneau[0] === '?' || restePanneau[0] === '#'));
     if (type === 'testKey' || type === 'authLogin' || type === 'authLogout' || type === 'getAccount') return interne;
     if (type === 'pingServeur') return interne;
-    if (type === 'cancelGenerate') return panneau;
+    if (type === 'cancelGenerate' || type === 'getAnalyseResult') return panneau;
     if (type === 'openOptions' || type === 'openSidePanel') return interne || pageVinted;
     if (type === 'generate' || type === 'fetchImage') return pageVinted || panneau;
     if (type === 'getPrefs') return pageVinted || panneau;

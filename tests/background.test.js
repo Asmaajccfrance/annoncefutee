@@ -26,7 +26,12 @@ function creerService(fetchFaux, stockage) {
       runtime: { id: EXT, lastError: undefined, onMessage: { addListener: (f) => ecouteurs.push(f) }, onInstalled: { addListener() {} }, sendMessage: () => Promise.resolve() },
       storage: {
         local: {
-          get: (defauts, cb) => cb(Object.assign({}, defauts, donnees)),
+          get: (defauts, cb) => {
+            const base = defauts && typeof defauts === 'object' && !Array.isArray(defauts) ? defauts : {};
+            const res = Object.assign({}, base, donnees);
+            if (typeof cb === 'function') cb(res);
+            return Promise.resolve(res);
+          },
           set: async (o) => { Object.assign(donnees, o); },
           setAccessLevel() {}
         }
@@ -116,4 +121,56 @@ test('diagnostic : service fermé détecté sans identifiants, sans IA, sans cr�
   const mort = creerService(async () => { throw new Error('réseau'); });
   const rep3 = await mort.appeler({ type: 'pingServeur' }, PANNEAU);
   assert.strictEqual(rep3.data.joignable, false);
+});
+
+test('le résultat d\'une analyse est mémorisé : le panneau le retrouve même s\'il a été fermé', async () => {
+  const service = creerService(async () => reponse(200, {
+    data: { titre: 'Pull', description: 'd', categorie: 'c', couleurs: [], a_verifier: [] },
+    credits: { remaining: 28 }
+  }));
+  const rep = await service.appeler({ type: 'generate', images: ['QUJD'], precisions: '', requestId: 'r-ok' }, PANNEAU);
+  assert.strictEqual(rep.ok, true);
+
+  const relu = await service.appeler({ type: 'getAnalyseResult', requestId: 'r-ok' }, PANNEAU);
+  assert.strictEqual(relu.data.etat, 'termine');
+  assert.strictEqual(relu.data.ok, true);
+  assert.strictEqual(relu.data.data.titre, 'Pull');
+
+  const inconnu = await service.appeler({ type: 'getAnalyseResult', requestId: 'jamais-vue' }, PANNEAU);
+  assert.strictEqual(inconnu.data.etat, 'inconnu');
+  assert.strictEqual((await service.appeler({ type: 'getAnalyseResult', requestId: 'r-ok' }, PAGE)).refuse, true, 'réservé au panneau');
+});
+
+test('analyse en cours : état « en-cours » ; échec mémorisé avec son code serveur', async () => {
+  let liberer;
+  const lent = creerService(() => new Promise((resolve) => { liberer = () => resolve(reponse(200, { data: { titre: 't' } })); }));
+  const generation = lent.appeler({ type: 'generate', images: ['QUJD'], precisions: '', requestId: 'r-lent' }, PANNEAU);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.strictEqual((await lent.appeler({ type: 'getAnalyseResult', requestId: 'r-lent' }, PANNEAU)).data.etat, 'en-cours');
+  liberer();
+  await generation;
+
+  const ferme = creerService(async () => reponse(403, { code: 'client_access_closed', message: 'Le service n\'est pas encore ouvert.' }));
+  const rep = await ferme.appeler({ type: 'generate', images: ['QUJD'], precisions: '', requestId: 'r-ferme' }, PANNEAU);
+  assert.strictEqual(rep.ok, false);
+  assert.strictEqual(rep.serverCode, 'client_access_closed');
+  const relu = await ferme.appeler({ type: 'getAnalyseResult', requestId: 'r-ferme' }, PANNEAU);
+  assert.strictEqual(relu.data.ok, false);
+  assert.strictEqual(relu.data.serverCode, 'client_access_closed');
+});
+
+test('compte de test : indicateur transmis au panneau, la clé OpenAI n\'apparaît jamais', async () => {
+  const service = creerService(async (url) => {
+    if (url.endsWith('/auth/login')) {
+      return reponse(200, { token: 'jeton-sanctum', user: { email: 'essai-chrome@annoncefutee.fr', test_account: true }, credits: { unlimited: true, used: 0 } });
+    }
+    if (url.endsWith('/health')) return reponse(200, { ok: true, openai_configured: true, client_api: false, test_account_access: true });
+    return reponse(200, { user: { email: 'essai-chrome@annoncefutee.fr', test_account: true }, credits: { unlimited: true, used: 0 } });
+  });
+  const connexion = await service.appeler({ type: 'connectAccount', email: 'essai-chrome@annoncefutee.fr', password: 'x' }, PANNEAU);
+  const texte = JSON.stringify(connexion);
+  assert.ok(!/sk-|OPENAI/i.test(texte));
+  const ping = await service.appeler({ type: 'pingServeur' }, PANNEAU);
+  assert.strictEqual(ping.data.clientApi, false);
+  assert.strictEqual(ping.data.accesTest, true);
 });

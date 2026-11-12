@@ -69,6 +69,7 @@ function creerPanneau(options = {}) {
     requetes: [],
     appelsRemplir: [],
     annulations: [],
+    resultats: options.resultats || {},
     enAttente: null,
     generer: options.generer || (() => ({ ok: true, data: ANNONCE })),
     compte: options.compte || { connected: true, email: 'test@annoncefutee.fr', credits: { monthly: 30, used: 1, remaining: 29, analysis_cost: 1 } }
@@ -97,13 +98,28 @@ function creerPanneau(options = {}) {
           serveur.appelsGenerer++;
           serveur.requetes.push(msg);
           const rep = serveur.generer(msg, serveur);
+          // Comme le vrai service worker : le résultat est mémorisé, même si le panneau est fermé entre-temps.
+          const memoriser = (r) => {
+            serveur.resultats[msg.requestId] = r.ok
+              ? { etat: 'termine', ok: true, data: r.data }
+              : { etat: 'termine', ok: false, error: r.error, code: r.code, serverCode: r.serverCode };
+          };
+          const debiter = (r) => {
+            const c = serveur.compte.credits;
+            if (!r.ok || !c) return;
+            if (c.unlimited) c.used += 1; else c.remaining -= 1;
+          };
           if (rep && typeof rep.then === 'function') {
+            serveur.resultats[msg.requestId] = { etat: 'en-cours' };
             serveur.enAttente = { requestId: msg.requestId, repondre: repondre };
-            rep.then((r) => { if (r) repondre(r); });
+            rep.then((r) => { if (r) { debiter(r); memoriser(r); repondre(r); } });
           } else {
-            if (rep.ok && serveur.compte.credits) serveur.compte.credits.remaining -= 1;
+            debiter(rep);
+            memoriser(rep);
             repondre(rep);
           }
+        } else if (msg.type === 'getAnalyseResult') {
+          repondre({ ok: true, data: serveur.resultats[msg.requestId] || { etat: 'inconnu' } });
         } else if (msg.type === 'cancelGenerate') {
           serveur.annulations.push(msg.requestId);
           if (serveur.enAttente && serveur.enAttente.requestId === msg.requestId) {

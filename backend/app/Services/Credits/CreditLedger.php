@@ -12,14 +12,64 @@ class CreditLedger
     public function summary(User $user): array
     {
         $user->loadMissing('plan');
-        $monthly = $this->quota($user);
         $used = $this->usedThisMonth($user);
+
+        if ($this->isUnlimited($user)) {
+            // Illimité = aucun quota de crédits. La consommation reste enregistrée et les plafonds
+            // financiers restent appliqués (voir reserve()).
+            return [
+                'monthly' => null,
+                'used' => $used,
+                'remaining' => null,
+                'unlimited' => true,
+                'analysis_cost' => $this->analysisCost($user),
+                'spend' => $this->spendSummary($user),
+            ];
+        }
+
+        $monthly = $this->quota($user);
 
         return [
             'monthly' => $monthly,
             'used' => $used,
             'remaining' => max(0, $monthly - $used),
+            'unlimited' => false,
             'analysis_cost' => $this->analysisCost($user),
+        ];
+    }
+
+    public function isUnlimited(User $user): bool
+    {
+        return $user->isInternalTestAccount();
+    }
+
+    /**
+     * Consommation financière estimée (jetons réellement facturés par le fournisseur × tarif configuré).
+     *
+     * @return array<string, mixed>
+     */
+    public function spendSummary(User $user): array
+    {
+        $today = (int) UsageEvent::query()
+            ->where('user_id', $user->id)
+            ->where('created_at', '>=', now()->startOfDay())
+            ->sum('estimated_cost_micros');
+        $month = (int) UsageEvent::query()
+            ->where('user_id', $user->id)
+            ->where('created_at', '>=', now()->startOfMonth())
+            ->sum('estimated_cost_micros');
+        $analyses = UsageEvent::query()
+            ->where('user_id', $user->id)
+            ->where('created_at', '>=', now()->startOfMonth())
+            ->where('status', 'succeeded')
+            ->count();
+
+        return [
+            'today_usd' => round($today / 1_000_000, 4),
+            'month_usd' => round($month / 1_000_000, 4),
+            'analyses_month' => $analyses,
+            'daily_cap_usd' => (float) config('credits.daily_user_cost_usd'),
+            'estimated' => true,
         ];
     }
 
@@ -64,7 +114,8 @@ class CreditLedger
                 throw new ApiException('analysis_in_progress', 'Une analyse est déjà en cours.', 429);
             }
 
-            if ($stats['used_month'] + $cost > $this->quota($user)) {
+            // Pas de quota pour un compte de test ; tout le reste (une analyse à la fois, plafonds de coût) s'applique.
+            if (! $this->isUnlimited($user) && $stats['used_month'] + $cost > $this->quota($user)) {
                 throw new ApiException('credits_exhausted', 'Quota mensuel atteint.', 429);
             }
 

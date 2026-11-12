@@ -47,11 +47,27 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'internal_test_account' => 'boolean',
         ];
     }
 
     public function plan(): BelongsTo
     {
         return $this->belongsTo(Plan::class);
+    }
+
+    /**
+     * Compte de test interne : sans quota de crédits, autorisé même service fermé.
+     * Double verrou : drapeau en base ET adresse listée dans la configuration du serveur.
+     */
+    public function isInternalTestAccount(): bool
+    {
+        return (bool) $this->internal_test_account
+            && self::isTestAccountEmail((string) $this->email);
+    }
+
+    public static function isTestAccountEmail(string $email): bool
+    {
+        return in_array(strtolower(trim($email)), (array) config('access.test_account_emails', []), true);
     }
 }

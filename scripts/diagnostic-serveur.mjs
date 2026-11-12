@@ -33,7 +33,13 @@ if (sante.statut !== 200) {
 console.log('Joignable : oui');
 console.log('Clé OpenAI présente côté serveur :', sante.corps && sante.corps.openai_configured === true ? 'oui' : 'non / inconnu');
 
-if (connexion.statut === 403) console.log('Service (CLIENT_API) : FERMÉ aux connexions. Aucune génération possible depuis Chrome.');
+const accesTest = sante.corps && sante.corps.test_account_access === true;
+if (connexion.statut === 403) {
+  console.log('Service (CLIENT_API) : FERMÉ au public.');
+  console.log(accesTest
+    ? 'Compte de test : accès RÉSERVÉ configuré côté serveur (TEST_ACCOUNT_EMAILS) : seul ce compte peut se connecter.'
+    : 'Compte de test : AUCUN accès réservé configuré. Aucune génération possible depuis Chrome.');
+}
 else if (connexion.statut === 422) console.log('Service (CLIENT_API) : OUVERT aux connexions. À refermer après les essais.');
 else console.log('Service (CLIENT_API) : indéterminé (HTTP ' + connexion.statut + ').');
 

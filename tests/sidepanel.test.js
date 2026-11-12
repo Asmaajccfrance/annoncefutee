@@ -88,9 +88,11 @@ test('photos en cours de chargement : aucune analyse avant qu\'elles soient prê
 
 test('serveur fermé (CLIENT_API=false) : message clair, crédit non consommé, aucun nouvel essai', async () => {
   const p = creerPanneau({
-    generer: () => ({ ok: false, error: 'Le service n\'est pas encore ouvert.', code: 'HTTP_403' })
+    generer: () => ({ ok: false, error: 'Le service n\'est pas encore ouvert.', code: 'HTTP_403', serverCode: 'client_access_closed' })
   });
-  assert.ok(await jusqua(() => /Serveur indisponible/.test(p.messageLive())), p.messageLive());
+  assert.ok(await jusqua(() => /Accès fermé/.test(p.messageLive())), p.messageLive());
+  assert.doesNotMatch(p.messageLive(), /Serveur indisponible/, 'un accès fermé n\'est pas une panne');
+  assert.match(p.messageLive(), /Ce n'est pas une panne/);
   assert.match(p.messageLive(), /Aucune annonce n'a été générée/);
   assert.strictEqual(p.badge(), 'Erreur');
   assert.match(p.bilan(), /CréditNon consommé \(refusé par le serveur\)/);
@@ -302,10 +304,15 @@ test('création manuelle : groupes choisis par l\'utilisateur, un appel par grou
 test('diagnostic serveur : état réel affiché sans promettre que la chaîne fonctionne', async () => {
   const p = creerPanneau();
   p.$('#diagnostic-serveur').click();
-  assert.ok(await jusqua(() => /FERMÉ/.test(p.$('#diagnostic-resultat').textContent)));
+  assert.ok(await jusqua(() => /aucun compte de test configuré/.test(p.$('#diagnostic-resultat').textContent)));
   const texte = p.$('#diagnostic-resultat').textContent;
-  assert.match(texte, /CLIENT_API=false/);
   assert.match(texte, /fonctionnement non vérifié/);
   assert.match(texte, /aucun crédit utilisé/);
   p.fermer();
+
+  const q = creerPanneau({ ping: { url: 'https://x', joignable: true, ferme: true, accesTest: true, openaiConfigure: true } });
+  q.$('#diagnostic-serveur').click();
+  assert.ok(await jusqua(() => /réservé au compte de test/.test(q.$('#diagnostic-resultat').textContent)));
+  assert.match(q.$('#diagnostic-resultat').textContent, /ce n'est pas une panne/);
+  q.fermer();
 });

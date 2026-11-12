@@ -75,14 +75,52 @@ function erreurInterrompue() {
   return err;
 }
 
+// Le résultat d'une analyse est mémorisé ici (pas seulement renvoyé au panneau) : si le panneau est fermé
+// pendant l'analyse, il retrouve l'annonce à sa réouverture au lieu de relancer (et refacturer) l'analyse.
+const CLE_RESULTATS = 'analysesResultats';
+const DUREE_RESULTAT_MS = 2 * 60 * 60 * 1000;
+const MAX_RESULTATS = 6;
+
+async function memoriserResultat(requestId, resultat) {
+  if (!requestId) return;
+  try {
+    const stocke = (await chrome.storage.local.get(CLE_RESULTATS))[CLE_RESULTATS];
+    const maintenant = Date.now();
+    const base = stocke && typeof stocke === 'object' ? stocke : {};
+    const garde = Object.entries(base)
+      .filter(([, v]) => v && typeof v.at === 'number' && maintenant - v.at < DUREE_RESULTAT_MS)
+      .sort((a, b) => a[1].at - b[1].at)
+      .slice(-(MAX_RESULTATS - 1));
+    const out = Object.fromEntries(garde);
+    out[requestId] = Object.assign({ at: maintenant }, resultat);
+    await chrome.storage.local.set({ [CLE_RESULTATS]: out });
+  } catch (e) {
+    /* mémorisation facultative : la réponse directe au panneau reste valable */
+  }
+}
+
+async function lireResultat(requestId) {
+  if (analysesEnCours.has(requestId)) return { etat: 'en-cours' };
+  const stocke = (await chrome.storage.local.get(CLE_RESULTATS))[CLE_RESULTATS];
+  const r = stocke && stocke[requestId];
+  if (!r || typeof r.at !== 'number' || Date.now() - r.at >= DUREE_RESULTAT_MS) return { etat: 'inconnu' };
+  return Object.assign({ etat: 'termine' }, r);
+}
+
 async function genererInterruptible(requestId, images, precisions) {
   const controle = new AbortController();
   if (requestId) analysesEnCours.set(requestId, controle);
   try {
-    return await generer(images, precisions, controle.signal);
+    const annonce = await generer(images, precisions, controle.signal);
+    await memoriserResultat(requestId, { ok: true, data: annonce });
+    return annonce;
   } catch (e) {
-    if (controle.signal.aborted || (e && e.name === 'AbortError')) throw erreurInterrompue();
-    throw e;
+    const interrompue = controle.signal.aborted || (e && e.name === 'AbortError');
+    const erreur = interrompue ? erreurInterrompue() : e;
+    await memoriserResultat(requestId, {
+      ok: false, error: erreur.message || String(erreur), code: erreur.code || null, serverCode: erreur.serverCode || null
+    });
+    throw erreur;
   } finally {
     if (requestId) analysesEnCours.delete(requestId);
   }
@@ -107,6 +145,9 @@ async function pingServeur() {
     const json = await lireJson(sante);
     res.joignable = sante.ok;
     res.openaiConfigure = json && typeof json.openai_configured === 'boolean' ? json.openai_configured : null;
+    // Ouverture publique du service et existence d'un accès réservé au compte de test (booléens du serveur).
+    res.clientApi = json && typeof json.client_api === 'boolean' ? json.client_api : null;
+    res.accesTest = json && typeof json.test_account_access === 'boolean' ? json.test_account_access : null;
     // Une connexion vide est refusée par le middleware (403) quand le service est fermé, 422 quand il est ouvert.
     const sonde = await fetch(IA.urlApi(base, '/api/v1/auth/login'), {
       method: 'POST', credentials: 'omit', redirect: 'error',
@@ -227,6 +268,7 @@ async function analyserViaBackend(reglages, images, precisions, signal) {
   if (!reponse.ok || !json || !json.data) {
     const err = new Error(messageServeur(reponse, json));
     err.code = 'HTTP_' + reponse.status;
+    err.serverCode = json && typeof json.code === 'string' ? json.code.slice(0, 64) : null;
     throw err;
   }
   return IA.preparerAnnonceServeur(json.data, reglages);
@@ -252,6 +294,7 @@ async function connecterCompte(email, password, backendUrl) {
   if (!reponse.ok || !json || !json.token) {
     const err = new Error(messageServeur(reponse, json));
     err.code = 'HTTP_' + reponse.status;
+    err.serverCode = json && typeof json.code === 'string' ? json.code.slice(0, 64) : null;
     throw err;
   }
   const propre = IA.assainirReglages({ backendUrl: backendUrl, backendEmail: email, backendToken: json.token });
@@ -260,7 +303,10 @@ async function connecterCompte(email, password, backendUrl) {
     backendEmail: propre.backendEmail,
     backendToken: propre.backendToken
   });
-  return { connected: true, email: propre.backendEmail, credits: json.credits || null, backendUrl: propre.backendUrl };
+  return {
+    connected: true, email: propre.backendEmail, credits: json.credits || null, backendUrl: propre.backendUrl,
+    testAccount: !!(json.user && json.user.test_account)
+  };
 }
 
 async function deconnecterCompte() {
@@ -297,7 +343,7 @@ async function lireCompte() {
     }
     if (reponse.status === 403) return { connected: true, email: reglages.backendEmail, credits: null, ferme: true };
     if (!reponse.ok || !json || !json.user) return { connected: true, email: reglages.backendEmail, credits: null, indisponible: true };
-    return { connected: true, email: json.user.email, credits: json.credits || null };
+    return { connected: true, email: json.user.email, credits: json.credits || null, testAccount: !!json.user.test_account };
   } catch (e) {
     return { connected: true, email: reglages.backendEmail, credits: null, offline: true };
   }
@@ -355,7 +401,7 @@ chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
   const traiter = (promesse) => {
     promesse.then(
       (data) => repondre({ ok: true, data }),
-      (e) => repondre({ ok: false, error: e.message || String(e), code: e.code || null })
+      (e) => repondre({ ok: false, error: e.message || String(e), code: e.code || null, serverCode: e.serverCode || null })
     );
     return true;
   };
@@ -367,6 +413,10 @@ chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
   if (msg.type === 'cancelGenerate') {
     const id = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : '';
     return traiter(Promise.resolve(annulerAnalyse(id)));
+  }
+  if (msg.type === 'getAnalyseResult') {
+    const id = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : '';
+    return traiter(lireResultat(id));
   }
   if (msg.type === 'pingServeur') return traiter(pingServeur());
   if (msg.type === 'fetchImage') return traiter(recupererImage(msg.url));

@@ -16,8 +16,13 @@
   const $ = (s, c = document) => c.querySelector(s);
   const $$ = (s, c = document) => Array.from(c.querySelectorAll(s));
 
-  const MSG_FERME = 'Serveur indisponible : le service n\'est pas ouvert pour le moment. Aucune annonce n\'a été générée.';
-  const MSG_RESEAU = 'Serveur indisponible : connexion impossible. Aucune annonce n\'a été générée.';
+  // Deux situations distinctes, jamais confondues : le serveur répond mais refuse l'accès (configuration),
+  // ou il ne répond pas du tout (réseau / panne).
+  const MSG_FERME = 'Accès fermé : le serveur répond, mais l\'accès à l\'IA est fermé pour ce compte (ouverture du service ou compte de test non configuré côté serveur). Ce n\'est pas une panne. Aucune annonce n\'a été générée.';
+  const MSG_RESEAU = 'Serveur injoignable : connexion impossible (réseau ou panne). Aucune annonce n\'a été générée.';
+  const MSG_TEMPORAIRE = 'Le service IA est momentanément indisponible.';
+  // Au plus deux nouveaux essais automatiques (après 2 puis 5 fois le délai de stabilisation), jamais plus.
+  const FACTEURS_REESSAI = [2, 5];
   const PAGE_VENTE = /^https:\/\/www\.vinted\.fr\/items\/(new|\d+\/edit)/;
   const COTE_MAX = 1024;
   const MAX_BROUILLONS_STOCKES = 200;
@@ -68,6 +73,8 @@
       minuteur: null,
       tick: null,
       echeance: 0,
+      reessais: 0,             // nouveaux essais automatiques déjà faits pour cet ensemble de photos
+      activite: null,          // { heure, texte } : dernier événement affiché
       annulation: null,        // { annule, envoye, requestId } pendant une analyse
       ignoree: ''              // ensemble de photos pour lequel l'automatisme ne doit plus rien lancer
     };
@@ -152,10 +159,17 @@
     return new Date().toISOString().slice(0, 10);
   }
 
+  // Erreur passagère : le serveur n'a pas pu répondre. Sert à décider d'un nouvel essai (sous conditions).
+  function erreurTemporaire(err) {
+    const code = err && err.code;
+    return code === 'NETWORK' || code === 'HTTP_500' || code === 'HTTP_502' || code === 'HTTP_503' || code === 'HTTP_504';
+  }
+
   function messageErreur(err) {
     const code = err && err.code;
-    if (code === 'HTTP_403') return MSG_FERME;
+    if (code === 'HTTP_403' && (!err.serverCode || err.serverCode === 'client_access_closed')) return MSG_FERME;
     if (code === 'NETWORK') return MSG_RESEAU;
+    if (erreurTemporaire(err)) return MSG_TEMPORAIRE + ' Aucune annonce n\'a été générée.';
     if (code === 'ABORTED') return 'Analyse interrompue.';
     if (code === 'HTTP_402' || code === 'HTTP_429') return 'Crédits ou quota épuisés. Aucune annonce n\'a été générée.';
     const base = (err && err.message) || 'Génération impossible.';
@@ -515,8 +529,14 @@
     $('#stat-prets').textContent = stats.prets;
     $('#stat-valeur').textContent = (stats.valeurTotale || 0).toFixed(0) + ' €';
     const cr = creditsRestants();
-    $('#stat-credits').textContent = cr === null ? '--' : cr;
+    $('#stat-credits').textContent = creditsIllimites() ? 'Illimités' : (cr === null ? '--' : cr);
+    rafraichirCompteCarte();
     rendreLive();
+
+    // Dernière activité du formulaire courant (horodatée), en plus des dernières annonces.
+    const act = $('#activite-live');
+    act.hidden = !live.activite;
+    act.textContent = live.activite ? live.activite.heure + ' — ' + live.activite.texte : '';
 
     const recents = Batch.trierBrouillons(brouillons, 'date_desc').slice(0, 3);
     const listeEl = $('#activite-liste');
@@ -575,6 +595,7 @@
   function messageLive(L, texte, erreur = false) {
     L.message = texte;
     L.erreur = erreur;
+    L.activite = { heure: new Date().toTimeString().slice(0, 8), texte: texte };
     majLive(L);
   }
 
@@ -686,10 +707,11 @@
     gen.hidden = occupe || nb === 0 || !!L.enChargement;
     gen.textContent = L.brouillon || L.erreur ? 'Régénérer l\'annonce' : 'Générer l\'annonce';
     $('#live-remplir').hidden = occupe || !L.brouillon || L.tabId === null;
-    $('#live-annuler').hidden = !(occupe || L.minuteur);
+    $('#live-annuler').hidden = !(occupe || L.minuteur || L.reessai);
   }
 
   function annulerMinuteur(L) {
+    if (L.reessai) { clearTimeout(L.reessai.minuteur); L.reessai = null; }
     clearTimeout(L.minuteur);
     clearInterval(L.tick);
     L.minuteur = null;
@@ -708,6 +730,7 @@
     L.analyse = 'aucune';
     L.credit = { etat: 'aucun', detail: '' };
     L.ignoree = '';
+    L.reessais = 0;
   }
 
   // ========== SYNCHRONISATION AVEC LES FORMULAIRES VINTED ==========
@@ -909,6 +932,7 @@
         connected: !!rep.data.connected,
         email: rep.data.email || '',
         credits: rep.data.credits || null,
+        testAccount: !!rep.data.testAccount,
         ferme: !!rep.data.ferme,
         hors_ligne: !!(rep.data.offline || rep.data.indisponible)
       };
@@ -923,6 +947,7 @@
     if (!compte.connected) return { erreur: 'Session expirée. Reconnecte-toi dans Réglages.' };
     if (compte.ferme) return { erreur: MSG_FERME };
     if (compte.hors_ligne) return { erreur: MSG_RESEAU };
+    if (creditsIllimites()) return { ok: true, cout: 0 };
     if (compte.credits && typeof compte.credits.remaining === 'number') {
       const cout = (compte.credits.analysis_cost || 1) * nbAnalyses;
       if (compte.credits.remaining < cout) {
@@ -938,21 +963,45 @@
     if (rep && rep.ok && rep.data) return rep.data;
     const err = new Error((rep && rep.error) || 'Génération impossible.');
     err.code = rep && rep.code;
+    err.serverCode = rep && rep.serverCode;
     throw err;
   }
 
-  // Constate le crédit réellement consommé en comparant le solde avant/après.
+  const creditsIllimites = () => !!(compte.credits && compte.credits.unlimited === true);
+
+  // Mesure comparable avant/après : plus elle baisse, plus on a consommé. Pour un compte sans quota,
+  // c'est le compteur de consommation du serveur (inversé) ; sinon le solde restant.
+  function mesureCredit() {
+    const c = compte.credits;
+    if (!c) return null;
+    if (c.unlimited === true) return typeof c.used === 'number' ? -c.used : null;
+    return typeof c.remaining === 'number' ? c.remaining : null;
+  }
+
+  // Constate le crédit réellement consommé en comparant avant/après. Retourne true si le constat est fiable
+  // (compte relu avec succès) : c'est la condition pour tout nouvel essai automatique.
   async function constaterCredit(L, moteur, avant, apresEnvoi) {
-    if (moteur !== 'backend') { L.credit = { etat: 'claude', detail: '' }; return; }
-    await actualiserCompte();
-    const apres = creditsRestants();
-    if (avant === null || apres === null) {
+    if (moteur !== 'backend') { L.credit = { etat: 'claude', detail: '' }; return false; }
+    const rep = await actualiserCompte();
+    const apres = mesureCredit();
+    const releve = !!(rep && rep.ok && rep.data && rep.data.connected && !rep.data.offline && !rep.data.indisponible && !rep.data.ferme);
+    if (avant === null || apres === null || !releve) {
       L.credit = { etat: 'inconnu', detail: 'solde illisible, vérifie ton compte' };
-    } else if (apres < avant) {
-      L.credit = { etat: 'consomme', detail: (avant - apres) + ' crédit (' + avant + ' → ' + apres + ')' };
-    } else {
-      L.credit = { etat: 'non-consomme', detail: 'solde inchangé : ' + apres + (apresEnvoi ? ', à confirmer plus tard' : '') };
+      return false;
     }
+    const illimite = creditsIllimites();
+    if (apres < avant) {
+      L.credit = {
+        etat: 'consomme',
+        detail: illimite ? (avant - apres) + ' analyse comptabilisée (crédits illimités)' : (avant - apres) + ' crédit (' + avant + ' → ' + apres + ')'
+      };
+    } else {
+      L.credit = {
+        etat: 'non-consomme',
+        detail: illimite ? 'compteur inchangé' : 'solde inchangé : ' + apres + (apresEnvoi ? ', à confirmer plus tard' : '')
+      };
+    }
+    return true;
   }
 
   async function controlesAuto() {
@@ -1038,6 +1087,8 @@
 
   // Délai de stabilisation : repart à zéro à chaque changement de photos, ne part jamais pendant un chargement.
   function planifierAuto(L) {
+    if (L.reessai && L.reessai.cle === L.cle) return;   // un nouvel essai est déjà programmé
+    if (reprendreSiBesoin(L)) return;                  // une analyse déjà envoyée est reprise, jamais relancée
     annulerMinuteur(L);
     if (!reglages.autoGenerer || !L.photos.length || L.enChargement) return;
     if (L.ignoree === L.cle || analysesTentees.has(L.cle) || brouillons.some((b) => b.cle === L.cle)) return;
@@ -1060,6 +1111,178 @@
     for (const L of lives.values()) if (!L.minuteur) planifierAuto(L);
   }
 
+  // ========== ANALYSES ENVOYÉES : MÉMOIRE DURABLE (reprise après fermeture du panneau) ==========
+  const DUREE_ENVOI_MS = 2 * 60 * 60 * 1000;
+  const MAX_ENVOIS = 20;
+  const INTERVALLE_REPRISE_MS = 2500;
+  const envois = {};                       // empreinte des photos -> { requestId, at, tabId, nbPhotos, precisions, etat }
+  const requetesSession = new Set();       // requêtes envoyées par CE panneau (jamais « reprises »)
+  const reprisesEnCours = new Set();
+  const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+  async function ecrireEnvois() {
+    try {
+      await chrome.storage.local.set({ analysesEnvoyees: envois });
+    } catch (e) {
+      console.warn('[AF] Mémorisation des analyses impossible :', e);
+    }
+  }
+
+  async function memoriserEnvoi(cle, entree) {
+    envois[cle] = entree;
+    const maintenant = Date.now();
+    for (const [k, v] of Object.entries(envois)) if (!v || maintenant - v.at > DUREE_ENVOI_MS) delete envois[k];
+    const anciens = Object.entries(envois).sort((a, b) => a[1].at - b[1].at);
+    while (anciens.length > MAX_ENVOIS) delete envois[anciens.shift()[0]];
+    await ecrireEnvois();
+  }
+
+  async function oublierEnvoi(cle) {
+    delete envois[cle];
+    await ecrireEnvois();
+  }
+
+  async function changerEtatEnvoi(cle, etatEnvoi) {
+    if (envois[cle]) await memoriserEnvoi(cle, Object.assign({}, envois[cle], { etat: etatEnvoi }));
+  }
+
+  // Relit les envois récents : ils comptent comme « déjà analysés » (jamais de nouvelle analyse automatique
+  // pour les mêmes photos), et ceux dont le résultat est attendu seront repris.
+  async function chargerEnvois() {
+    try {
+      const stocke = (await lire(['analysesEnvoyees'])).analysesEnvoyees;
+      if (!stocke || typeof stocke !== 'object' || Array.isArray(stocke)) return;
+      for (const [cle, v] of Object.entries(stocke)) {
+        if (v && typeof v === 'object' && typeof v.requestId === 'string' && typeof v.at === 'number' && Date.now() - v.at < DUREE_ENVOI_MS) {
+          envois[cle] = v;
+          analysesTentees.add(cle);
+        }
+      }
+    } catch (e) {
+      console.warn('[AF] Relecture des analyses envoyées :', e);
+    }
+  }
+
+  // Erreur passagère sans consommation vérifiée : jusqu'à deux nouveaux essais espacés, annulables.
+  function planifierReessai(L, cle, err) {
+    if (L.reessais >= FACTEURS_REESSAI.length || !reglages.autoGenerer) return;
+    const delai = FACTEURS_REESSAI[L.reessais] * reglages.delaiS;
+    L.reessais++;
+    messageLive(L, messageErreur(err) + ' Aucun crédit consommé : nouvel essai automatique dans ' + delai + ' s (' +
+      L.reessais + '/' + FACTEURS_REESSAI.length + '). « Interrompre » l\'annule.', true);
+    L.reessai = {
+      cle: cle,
+      minuteur: setTimeout(() => {
+        L.reessai = null;
+        if (L.cle !== cle || !reglages.autoGenerer) return;
+        L.ignoree = '';
+        analysesTentees.delete(cle);
+        garder('Nouvel essai', () => lancerPipeline(L, false));
+      }, delai * 1000)
+    };
+    majLive(L);
+  }
+
+  // Suite commune d'une analyse reçue (directement ou retrouvée après réouverture) :
+  // brouillon, puis remplissage automatique du formulaire si le mode le demande.
+  async function terminerAnalyse(L, annonce, ctx) {
+    const { cle, tabId, precisions, manuel } = ctx;
+    const premiere = photosAlbum().find((p) => {
+      const o = fpParPhoto.get(p.id);
+      return o && o.tabId === tabId && L.photos[0] && o.fp === L.photos[0].fp;
+    });
+    const vignette = premiere ? vignetteDe(Studio.rendrePhoto(premiere)) : '';
+    const brouillon = await enregistrerBrouillon(annonce, vignette, ctx.nbImages, cle, precisions);
+    await changerEtatEnvoi(cle, 'terminee');
+    etape(L, 'annonce', 'fait');
+
+    if (L.cle !== cle) {
+      afficherStatut('Annonce générée pour un ensemble de photos précédent : retrouve-la dans « Mes annonces ».', 'info');
+      return;
+    }
+    L.brouillon = brouillon;
+    L.precisionsUtilisees = precisions;
+    L.champs = null;
+
+    if (ctx.interrompue) {
+      messageLive(L, 'L\'analyse s\'est terminée avant l\'interruption : annonce enregistrée (' + texteCredit(L.credit).toLowerCase() +
+        '). Le formulaire n\'a pas été rempli.');
+      return;
+    }
+
+    const remplirAuto = !manuel && reglages.autoGenerer && reglages.autoRemplir;
+    if (remplirAuto && tabId !== null) {
+      etape(L, 'remplissage', 'en-cours');
+      messageLive(L, 'Annonce générée. Remplissage du formulaire…');
+      const res = await remplirFormulaire(tabId, brouillon);
+      if (res.erreur) {
+        etape(L, 'remplissage', 'erreur');
+        messageLive(L, 'Annonce générée, mais le formulaire n\'a pas été rempli : ' + res.erreur, true);
+      } else {
+        L.champs = res.champs;
+        etape(L, 'remplissage', 'fait');
+        messageLive(L, 'Annonce prête : ' + resumerChamps(res.champs) + '. Vérifie, puis publie toi-même.');
+      }
+    } else {
+      messageLive(L, 'Annonce générée : « ' + brouillon.titre + ' ». Clique sur « Remplir le formulaire ».');
+    }
+  }
+
+  // Une analyse envoyée par un panneau précédent (fermé ou rechargé) : on récupère son résultat auprès du
+  // service worker au lieu d'en lancer une autre. Si le résultat est perdu, aucune relance automatique.
+  function reprendreSiBesoin(L) {
+    const e = envois[L.cle];
+    if (!e || e.etat !== 'envoyee' || requetesSession.has(e.requestId) || reprisesEnCours.has(L.cle)) return false;
+    if (generationEnCours) return true;     // repris à la fin du traitement en cours (reprogrammerAutomatique)
+    reprisesEnCours.add(L.cle);
+    garder('Reprise de l\'analyse', () => reprendreAnalyse(L, e).finally(() => reprisesEnCours.delete(L.cle)));
+    return true;
+  }
+
+  async function reprendreAnalyse(L, e) {
+    const cle = L.cle;
+    const tabId = L.tabId;
+    generationEnCours = true;
+    L.analyse = 'en-cours';
+    L.precisions = e.precisions || L.precisions;
+    definirEtapes(L, { photos: 'fait', pretes: 'fait', analyse: 'en-cours' });
+    messageLive(L, 'Une analyse envoyée avant la fermeture du panneau est reprise : récupération du résultat…');
+    try {
+      let r = { etat: 'inconnu' };
+      for (let i = 0; i < 80; i++) {
+        const rep = await envoyer({ type: 'getAnalyseResult', requestId: e.requestId });
+        r = rep.ok && rep.data ? rep.data : { etat: 'inconnu' };
+        if (r.etat !== 'en-cours') break;
+        await pause(INTERVALLE_REPRISE_MS);
+        if (L.cle !== cle) return;
+      }
+      if (L.cle !== cle) return;
+      await actualiserCompte();
+      if (r.etat === 'termine' && r.ok && r.data) {
+        L.analyse = 'terminee';
+        etape(L, 'analyse', 'fait');
+        L.credit = { etat: 'inconnu', detail: 'analyse envoyée avant la fermeture du panneau : vérifie la consommation du compte' };
+        await terminerAnalyse(L, r.data, { cle: cle, tabId: tabId, nbImages: e.nbPhotos || 0, precisions: e.precisions || '', manuel: false, interrompue: false });
+      } else if (r.etat === 'termine') {
+        L.analyse = 'echec';
+        L.ignoree = cle;
+        L.credit = { etat: 'inconnu', detail: 'à vérifier dans le compte' };
+        await changerEtatEnvoi(cle, 'abandonnee');
+        echecLive(L, messageErreur({ code: r.code, serverCode: r.serverCode, message: r.error }) + ' (analyse envoyée avant la fermeture du panneau)');
+      } else {
+        L.analyse = 'echec';
+        L.ignoree = cle;
+        L.credit = { etat: 'inconnu', detail: 'à vérifier dans le compte' };
+        await changerEtatEnvoi(cle, 'abandonnee');
+        echecLive(L, 'Une analyse avait été envoyée pour ces photos avant la fermeture du panneau, mais son résultat n\'a pas été retrouvé. ' +
+          'Pour éviter une double facturation, aucune nouvelle analyse automatique n\'est lancée. « Régénérer l\'annonce » la relancera à ta demande.');
+      }
+    } finally {
+      generationEnCours = false;
+      rafraichirVues();
+      reprogrammerAutomatique();
+    }
+  }
   async function lancerPipeline(L, manuel) {
     if (generationEnCours || !L.photos.length) return;
     annulerMinuteur(L);
@@ -1137,7 +1360,7 @@
           echecLive(L, credits.erreur);
           return;
         }
-        creditsAvant = creditsRestants();
+        creditsAvant = mesureCredit();
       }
       if (interrompu()) { sortirInterrompu(false); return; }
 
@@ -1156,61 +1379,38 @@
       const precisions = L.precisions;
       let annonce;
       ctl.envoye = true;
+      requetesSession.add(ctl.requestId);
+      // L'envoi est mémorisé AVANT l'appel : si le panneau est fermé pendant l'analyse, la réouverture
+      // retrouve le résultat (mémorisé par le service worker) au lieu de relancer et refacturer.
+      await memoriserEnvoi(cle, { requestId: ctl.requestId, at: Date.now(), tabId: tabId, nbPhotos: images.length, precisions: precisions, etat: 'envoyee' });
       try {
         annonce = await appelGenerer(images, precisions, ctl.requestId);
       } catch (err) {
         L.analyse = err.code === 'ABORTED' ? 'interrompue' : 'echec';
+        let verifie = false;
         if (ERREURS_REFUS_SERVEUR.indexOf(err.code) >= 0) {
           L.credit = { etat: 'non-consomme', detail: 'refusé par le serveur' };
+          verifie = true;
         } else {
-          await constaterCredit(L, moteur.moteur, creditsAvant, true);
+          verifie = await constaterCredit(L, moteur.moteur, creditsAvant, true);
         }
         L.ignoree = cle;
+        // Un envoi sans consommation vérifiée peut être refait ; sinon on garde la trace (jamais de double facturation).
+        if (L.credit.etat === 'non-consomme' && verifie) await oublierEnvoi(cle);
+        else await memoriserEnvoi(cle, Object.assign({}, envois[cle], { etat: 'abandonnee' }));
         echecLive(L, messageErreur(err) + (err.code === 'ABORTED' ? ' ' + texteCredit(L.credit) + '.' : ''));
+        // Erreur passagère, crédit vérifié non consommé, mode automatique : au plus deux nouveaux essais espacés.
+        if (!manuel && err.code !== 'ABORTED' && erreurTemporaire(err) && verifie && L.credit.etat === 'non-consomme') {
+          planifierReessai(L, cle, err);
+        } else if (erreurTemporaire(err) && !verifie) {
+          messageLive(L, messageErreur(err) + ' L\'état de la consommation n\'a pas pu être vérifié : aucun nouvel essai automatique pour éviter une double facturation. « Régénérer l\'annonce » relance à ta demande.', true);
+        }
         return;
       }
       L.analyse = 'terminee';
       etape(L, 'analyse', 'fait');
       await constaterCredit(L, moteur.moteur, creditsAvant, false);
-
-      const premiere = photosAlbum().find((p) => {
-        const o = fpParPhoto.get(p.id);
-        return o && o.tabId === tabId && L.photos[0] && o.fp === L.photos[0].fp;
-      });
-      const vignette = premiere ? vignetteDe(Studio.rendrePhoto(premiere)) : '';
-      const brouillon = await enregistrerBrouillon(annonce, vignette, images.length, cle, precisions);
-      etape(L, 'annonce', 'fait');
-
-      if (L.cle !== cle) {
-        afficherStatut('Annonce générée pour un ensemble de photos précédent : retrouve-la dans « Mes annonces ».', 'info');
-        return;
-      }
-      L.brouillon = brouillon;
-      L.precisionsUtilisees = precisions;
-      L.champs = null;
-
-      if (ctl.annule) {
-        messageLive(L, 'L\'analyse s\'est terminée avant l\'interruption : annonce enregistrée (' + texteCredit(L.credit).toLowerCase() +
-          '). Le formulaire n\'a pas été rempli.');
-        return;
-      }
-
-      const remplirAuto = !manuel && reglages.autoGenerer && reglages.autoRemplir;
-      if (remplirAuto && tabId !== null) {
-        etape(L, 'remplissage', 'en-cours');
-        messageLive(L, 'Annonce générée. Remplissage du formulaire…');
-        const res = await remplirFormulaire(tabId, brouillon);
-        if (res.erreur) {
-          etape(L, 'remplissage', 'erreur');
-          messageLive(L, 'Annonce générée, mais le formulaire n\'a pas été rempli : ' + res.erreur, true);
-        } else {
-          L.champs = res.champs;
-          etape(L, 'remplissage', 'fait');
-          messageLive(L, 'Annonce prête : ' + resumerChamps(res.champs) + '. Vérifie, puis publie toi-même.');
-        }
-      } else {
-        messageLive(L, 'Annonce générée : « ' + brouillon.titre + ' ». Clique sur « Remplir le formulaire ».');
-      }
+      await terminerAnalyse(L, annonce, { cle: cle, tabId: tabId, nbImages: images.length, precisions: precisions, manuel: manuel, interrompue: ctl.annule });
     } catch (e) {
       console.error('[AF] Erreur traitement :', e);
       L.analyse = 'echec';
@@ -1232,12 +1432,12 @@
       messageLive(L, 'Interruption en cours…');
       return;
     }
-    if (L.minuteur) {
+    if (L.minuteur || L.reessai) {
       annulerMinuteur(L);
       L.ignoree = L.cle;
       L.analyse = 'non-lancee';
       etape(L, 'pretes', '');
-      messageLive(L, 'Analyse automatique annulée pour ces photos. « Générer l\'annonce » la lancera à ta demande.');
+      messageLive(L, 'Analyse automatique annulée pour ces photos (aucun nouvel essai). « Générer l\'annonce » la lancera à ta demande.');
     }
   }
 
@@ -1835,6 +2035,7 @@
     $('#prixArrondi').value = d.prixArrondi || 1;
     $('#apiKey').value = d.apiKey || '';
     $('#autoGenerer').checked = reglages.autoGenerer;
+    majAffichageAuto();
     $('#autoRemplir').checked = reglages.autoRemplir;
     $('#limiteAuto').value = reglages.limiteAuto;
     $('#delaiStabilisation').value = reglages.delaiS;
@@ -1843,10 +2044,13 @@
 
   function majCompteUI() {
     const el = $('#compte-statut');
+    const illimite = creditsIllimites();
     if (compte.connected) {
       const cr = creditsRestants();
-      el.textContent = 'Connecté' + (compte.email ? ' : ' + compte.email : '') + (cr !== null ? ' — ' + cr + ' crédit(s)' : '') +
-        (compte.ferme ? ' — service fermé' : '');
+      el.textContent = 'Connecté' + (compte.email ? ' : ' + compte.email : '') +
+        (illimite ? ' — crédits illimités' : (cr !== null ? ' — ' + cr + ' crédit(s)' : '')) +
+        (compte.testAccount ? ' (compte test)' : '') +
+        (compte.ferme ? ' — accès fermé' : '');
       el.className = 'compte-statut connecte';
     } else {
       el.textContent = 'Non connecté';
@@ -1854,9 +2058,40 @@
     }
     $('#deconnecter').hidden = !compte.connected;
     const header = $('#credits');
-    header.hidden = creditsRestants() === null;
-    $('#credits-val').textContent = creditsRestants();
-    $('#stat-credits').textContent = creditsRestants() === null ? '--' : creditsRestants();
+    header.hidden = !illimite && creditsRestants() === null;
+    $('#credits-val').textContent = illimite ? 'Illimités' : creditsRestants();
+    $('#credits-suite').textContent = illimite ? (compte.testAccount ? ' — Compte test' : '') : ' restants';
+    $('#stat-credits').textContent = illimite ? 'Illimités' : (creditsRestants() === null ? '--' : creditsRestants());
+    rafraichirCompteCarte();
+  }
+
+  function formaterUsd(v) {
+    return String(Math.round((Number(v) || 0) * 10000) / 10000).replace('.', ',') + ' $';
+  }
+
+  // Carte « Compte et consommation » du tableau de bord : état réel, jamais plus optimiste que le serveur.
+  function rafraichirCompteCarte() {
+    const lignes = [];
+    if (!compte.connected) {
+      lignes.push(['Compte', 'Non connecté : connecte-toi dans Réglages', 'attention']);
+    } else {
+      lignes.push(['Compte', (compte.testAccount ? 'Compte test connecté : ' : 'Connecté : ') + (compte.email || ''), 'ok']);
+      if (compte.ferme) lignes.push(['Accès à l\'IA', 'Fermé pour ce compte (configuration du serveur)', 'alerte']);
+      else if (compte.hors_ligne) lignes.push(['Serveur', 'Injoignable ou indisponible', 'alerte']);
+      if (creditsIllimites()) {
+        lignes.push(['Crédits IA', 'Illimités' + (compte.testAccount ? ' — Compte test' : ''), 'ok']);
+        const s = compte.credits.spend;
+        if (s) {
+          lignes.push(['Dépense estimée aujourd\'hui', formaterUsd(s.today_usd) + ' / plafond ' + formaterUsd(s.daily_cap_usd), 'ok']);
+          lignes.push(['Dépense estimée ce mois', formaterUsd(s.month_usd) + ' · ' + s.analyses_month + ' analyse(s)', 'ok']);
+        }
+      } else if (creditsRestants() !== null) {
+        lignes.push(['Crédits IA', creditsRestants() + ' restant(s)', creditsRestants() > 0 ? 'ok' : 'alerte']);
+      }
+    }
+    $('#compte-bilan').innerHTML = lignes
+      .map((l) => '<li class="' + l[2] + '"><span>' + escapeHtml(l[0]) + '</span><span>' + escapeHtml(l[1]) + '</span></li>')
+      .join('');
   }
 
   function reautoriserAutomatique() {
@@ -1872,10 +2107,10 @@
     const rep = await envoyer({ type: 'authLogin', email: email, password: mdp, backendUrl: url });
     $('#password').value = '';
     if (!rep.ok) {
-      afficherStatut(messageErreur({ code: rep.code, message: rep.error }).replace(' Aucune annonce n\'a été générée.', ''), 'erreur');
+      afficherStatut(messageErreur({ code: rep.code, serverCode: rep.serverCode, message: rep.error }).replace(' Aucune annonce n\'a été générée.', ''), 'erreur');
       return;
     }
-    compte = { connected: true, email: rep.data.email, credits: rep.data.credits || null };
+    compte = { connected: true, email: rep.data.email, credits: rep.data.credits || null, testAccount: !!rep.data.testAccount };
     majCompteUI();
     afficherStatut('Connecté.', 'succes');
     reautoriserAutomatique();
@@ -1897,7 +2132,10 @@
     if (!rep.ok || !rep.data) { zone.textContent = 'Diagnostic impossible : ' + (rep.error || 'erreur inconnue'); return; }
     const r = rep.data;
     if (!r.joignable) { zone.textContent = 'Serveur injoignable (' + r.url + '). Aucune analyse n\'est possible.'; return; }
-    const ouverture = r.ferme === true ? 'service FERMÉ aux connexions (CLIENT_API=false) : aucune génération possible depuis Chrome'
+    const ouverture = r.ferme === true
+      ? (r.accesTest === true
+        ? 'service fermé au public, accès réservé au compte de test (c\'est voulu : le serveur répond, ce n\'est pas une panne)'
+        : 'service fermé aux connexions et aucun compte de test configuré côté serveur : aucune génération possible depuis Chrome')
       : r.ferme === false ? 'service ouvert aux connexions'
         : 'ouverture du service indéterminée';
     const openai = r.openaiConfigure === true ? 'clé OpenAI présente côté serveur (fonctionnement non vérifié)'
@@ -1934,25 +2172,38 @@
   });
 
   // Mode automatique : activé volontairement, avec information claire sur l'envoi des photos et les crédits
-  $('#autoGenerer').addEventListener('change', async (e) => {
-    if (e.target.checked) {
-      const limite = Math.max(1, Math.min(100, parseInt($('#limiteAuto').value, 10) || 10));
+  // Un seul interrupteur logique, deux cases (tableau de bord et Réglages) toujours synchronisées.
+  function majAffichageAuto() {
+    $('#autoGenerer').checked = reglages.autoGenerer;
+    $('#auto-dashboard').checked = reglages.autoGenerer;
+    $('#auto-etat').textContent = reglages.autoGenerer
+      ? 'Activée : déposer des photos sur Vinted lance seul l\'analyse, puis remplit le formulaire (jamais de publication).'
+      : 'Désactivée : les photos ne sont pas envoyées à l\'IA.';
+  }
+
+  async function changerModeAuto(active) {
+    if (active) {
+      const limite = Math.max(1, Math.min(100, parseInt($('#limiteAuto').value, 10) || reglages.limiteAuto || 10));
       const delai = bornerDelai($('#delaiStabilisation').value);
+      const cout = creditsIllimites()
+        ? '• Ce compte n\'a pas de quota de crédits, mais chaque analyse a un coût réel côté OpenAI (plafonné par le serveur)\n'
+        : '• Chaque analyse consomme des crédits\n';
       const accord = confirm(
         'Mode automatique\n\n' +
         'Quand les photos de ton formulaire Vinted ne changent plus pendant ' + delai + ' s, Annonce Futée les ENVOIE ' +
         'à notre service d\'IA (OpenAI via ton serveur Annonce Futée) pour rédiger l\'annonce, une seule fois par ensemble de photos.\n\n' +
-        '• Chaque analyse consomme des crédits\n' +
+        cout +
         '• Maximum ' + limite + ' analyses automatiques par jour\n' +
-        '• Tu peux interrompre à tout moment depuis le panneau\n' +
+        '• Tu peux interrompre à tout moment depuis le panneau, et désactiver ce mode quand tu veux\n' +
         '• Tes saisies manuelles ne sont jamais écrasées sans ta confirmation\n' +
         '• Rien n\'est jamais publié automatiquement\n\nActiver ?');
-      if (!accord) { e.target.checked = false; return; }
+      if (!accord) { majAffichageAuto(); return; }
       reglages.autoGenerer = true;
       reglages.consentementIA = true;
       reglages.limiteAuto = limite;
       reglages.delaiS = delai;
       await chrome.storage.local.set({ autoGenerer: true, consentementIA: true, limiteAuto: limite, delaiStabilisation: delai });
+      majAffichageAuto();
       afficherStatut('Mode automatique activé.', 'succes');
       await synchroniser(true);
       reautoriserAutomatique();
@@ -1961,10 +2212,14 @@
       reglages.consentementIA = false;
       lives.forEach(annulerMinuteur);
       await chrome.storage.local.set({ autoGenerer: false, consentementIA: false });
+      majAffichageAuto();
       afficherStatut('Mode automatique désactivé.', 'info');
     }
     rendreLive();
-  });
+  }
+
+  $('#autoGenerer').addEventListener('change', (e) => garder('Mode automatique', () => changerModeAuto(e.target.checked)));
+  $('#auto-dashboard').addEventListener('change', (e) => garder('Mode automatique', () => changerModeAuto(e.target.checked)));
 
   $('#autoRemplir').addEventListener('change', async (e) => {
     reglages.autoRemplir = e.target.checked;
@@ -1979,6 +2234,7 @@
   await chargerReglages();
   await chargerBrouillons();
   brouillons.forEach((b) => { if (b.cle) analysesTentees.add(b.cle); });
+  await chargerEnvois();
   await chargerAtelier();
   rafraichirVues();
   const compteLocal = await lire(['backendToken', 'backendEmail']);

@@ -13,6 +13,9 @@ class HealthController extends Controller
             'ok' => true,
             'openai_configured' => filled(config('openai.api_key')),
             'model' => (string) config('openai.model'),
+            // Booléens seulement : aucune adresse, aucune valeur sensible.
+            'client_api' => (bool) config('access.client_api'),
+            'test_account_access' => count((array) config('access.test_account_emails', [])) > 0,
         ]);
     }
 }

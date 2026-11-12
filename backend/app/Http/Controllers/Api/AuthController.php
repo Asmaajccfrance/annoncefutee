@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\LoginRequest;
 use App\Http\Requests\RegisterRequest;
@@ -34,6 +35,11 @@ class AuthController extends Controller
             throw ValidationException::withMessages([
                 'email' => 'Identifiants incorrects.',
             ]);
+        }
+
+        // Service fermé : même un mot de passe exact ne suffit pas, le compte doit être un compte de test interne.
+        if (! config('access.client_api') && ! $user->isInternalTestAccount()) {
+            throw new ApiException('client_access_closed', 'Le service n\'est pas encore ouvert.', 403);
         }
 
         return $this->tokenResponse($user, $request->input('device_name', 'api'), $credits, 200);
@@ -79,6 +85,7 @@ class AuthController extends Controller
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
+                'test_account' => $user->isInternalTestAccount(),
             ],
             'credits' => $credits->summary($user),
         ];

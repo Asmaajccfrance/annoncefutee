@@ -19,7 +19,7 @@
       </div>
     </div>
     <div id="credits" class="credits" hidden>
-      <span id="credits-val">--</span> crédits
+      <span id="credits-lib">Crédits IA :</span> <span id="credits-val">--</span><span id="credits-suite"> restants</span>
     </div>
   </header>
 
@@ -51,6 +51,16 @@
 
     <!-- TABLEAU DE BORD -->
     <section id="dashboard" class="section">
+      <div class="card auto-card" id="card-auto">
+        <label class="checkbox-label mode-auto">
+          <input type="checkbox" id="auto-dashboard">
+          <div>
+            <strong>Préparation automatique</strong>
+            <span class="aide-inline" id="auto-etat">Désactivée : les photos ne sont pas envoyées à l'IA.</span>
+          </div>
+        </label>
+      </div>
+
       <div class="card live" id="card-live">
         <div class="live-entete">
           <h2>Formulaire Vinted</h2>
@@ -110,8 +120,14 @@
         </div>
       </div>
 
+      <div class="card" id="card-compte">
+        <h2>Compte et consommation</h2>
+        <ul id="compte-bilan" class="live-bilan"></ul>
+      </div>
+
       <div class="card" id="card-activite">
         <h2>Dernière activité</h2>
+        <p class="aide" id="activite-live" hidden></p>
         <p class="texte-vide" id="activite-vide">Aucune annonce en préparation.</p>
         <div id="activite-liste"></div>
       </div>

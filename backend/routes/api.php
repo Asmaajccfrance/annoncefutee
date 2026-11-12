@@ -12,7 +12,7 @@ Route::prefix('v1')->group(function () {
         Route::post('auth/register', [AuthController::class, 'register'])
             ->middleware('registration.open');
         Route::post('auth/login', [AuthController::class, 'login'])
-            ->middleware('client.open');
+            ->middleware('client.open:login');
     });
 
     Route::middleware(['auth:sanctum', 'client.open'])->group(function () {
