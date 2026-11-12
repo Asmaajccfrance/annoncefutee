@@ -548,6 +548,111 @@
     });
   }
 
+  // ========== Gestion d'état pour le sidepanel ==========
+  // Stockage interne des albums par ID
+  const albumsParId = new Map();
+  let compteurAlbum = 0;
+
+  function genererIdAlbum() {
+    compteurAlbum++;
+    return 'album_' + Date.now().toString(36) + '_' + compteurAlbum;
+  }
+
+  // Crée un nouvel album et le stocke, retourne { id, ... }
+  function creerAlbumAvecId(nom) {
+    const album = creerAlbum(nom);
+    const id = genererIdAlbum();
+    const albumAvecId = { ...album, id: id };
+    albumsParId.set(id, albumAvecId);
+    return albumAvecId;
+  }
+
+  // Récupère un album par son ID
+  function obtenirAlbum(albumId) {
+    return albumsParId.get(albumId) || null;
+  }
+
+  // Met à jour un album dans le stockage
+  function mettreAJourAlbum(albumId, nouvelAlbum) {
+    if (!albumsParId.has(albumId)) return null;
+    const maj = { ...nouvelAlbum, id: albumId };
+    albumsParId.set(albumId, maj);
+    return maj;
+  }
+
+  // Liste les photos d'un album par son ID
+  function listerPhotos(albumId) {
+    const album = albumsParId.get(albumId);
+    return album ? (album.photos || []) : [];
+  }
+
+  // Ajoute une photo à un album par son ID
+  function ajouterPhotoParId(albumId, source, nom) {
+    const album = albumsParId.get(albumId);
+    if (!album) throw new Error('Album introuvable.');
+    const nouveau = ajouterPhoto(album, source, nom);
+    return mettreAJourAlbum(albumId, nouveau);
+  }
+
+  // Supprime une photo d'un album par ID
+  function supprimerPhoto(albumId, photoId) {
+    const album = albumsParId.get(albumId);
+    if (!album) return null;
+    const photos = (album.photos || []).filter((p) => p.id !== photoId);
+    const selection = (album.selection || []).filter((id) => id !== photoId);
+    const active = album.active === photoId ? (photos[0]?.id || '') : album.active;
+    return mettreAJourAlbum(albumId, { ...album, photos, selection, active });
+  }
+
+  // Applique une opération de recadrage par ID
+  function recadrerParId(albumId, photoId, rect) {
+    const album = albumsParId.get(albumId);
+    if (!album) return null;
+    const op = { type: 'recadrer', x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+    const nouveau = avecOperation(album, photoId, op);
+    return mettreAJourAlbum(albumId, nouveau);
+  }
+
+  // Applique un redressement par ID
+  function redresserParId(albumId, photoId, degres) {
+    const album = albumsParId.get(albumId);
+    if (!album) return null;
+    const op = { type: 'redresser', degres: degres };
+    const nouveau = avecOperation(album, photoId, op);
+    return mettreAJourAlbum(albumId, nouveau);
+  }
+
+  // Applique des réglages lumière par ID
+  function reglerParId(albumId, photoId, luminosite, contraste, saturation) {
+    const album = albumsParId.get(albumId);
+    if (!album) return null;
+    const op = { type: 'reglages', luminosite: luminosite, contraste: contraste, saturation: saturation };
+    const nouveau = avecOperation(album, photoId, op);
+    return mettreAJourAlbum(albumId, nouveau);
+  }
+
+  // Retire le fond par ID
+  function retirerFondParId(albumId, photoId, couleur) {
+    const album = albumsParId.get(albumId);
+    if (!album) return null;
+    const op = { type: 'retirerFond', couleur: couleur };
+    const nouveau = avecOperation(album, photoId, op);
+    return mettreAJourAlbum(albumId, nouveau);
+  }
+
+  // Demande mannequin par ID (actuellement retourne une erreur car non configuré)
+  function demanderMannequinParId(albumId, photoId) {
+    const album = albumsParId.get(albumId);
+    if (!album) return Promise.reject(new Error('Album introuvable.'));
+    const photo = (album.photos || []).find((p) => p.id === photoId);
+    if (!photo) return Promise.reject(new Error('Photo introuvable.'));
+    const result = demanderMannequin(photo);
+    if (!result.ok) {
+      return Promise.reject(new Error(result.message || 'Mannequin non disponible.'));
+    }
+    return Promise.resolve(result);
+  }
+
   return {
     MAX_ATELIER: MAX_ATELIER,
     MAX_BROUILLONS: MAX_BROUILLONS,
@@ -555,6 +660,7 @@
     creerImage: creerImage,
     peindre: peindre,
     lirePixel: lirePixel,
+    // Fonctions originales (pures)
     creerAlbum: creerAlbum,
     ajouterPhoto: ajouterPhoto,
     definirSelection: definirSelection,
@@ -569,6 +675,17 @@
     supprimerBrouillons: supprimerBrouillons,
     modifierPrixMasse: modifierPrixMasse,
     angleRedressement: angleRedressement,
-    messageFond: messageFond
+    messageFond: messageFond,
+    // Fonctions avec gestion d'état par ID
+    creerAlbumAvecId: creerAlbumAvecId,
+    obtenirAlbum: obtenirAlbum,
+    listerPhotos: listerPhotos,
+    ajouterPhotoParId: ajouterPhotoParId,
+    supprimerPhoto: supprimerPhoto,
+    recadrerParId: recadrerParId,
+    redresserParId: redresserParId,
+    reglerParId: reglerParId,
+    retirerFondParId: retirerFondParId,
+    demanderMannequinParId: demanderMannequinParId
   };
 });

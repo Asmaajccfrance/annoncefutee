@@ -132,7 +132,7 @@
   // ========== PHOTOS ==========
   function creerAlbumSiBesoin() {
     if (!albumActif) {
-      albumActif = Studio.creerAlbum('Import ' + new Date().toLocaleDateString('fr-FR'));
+      albumActif = Studio.creerAlbumAvecId('Import ' + new Date().toLocaleDateString('fr-FR'));
     }
     return albumActif;
   }
@@ -146,7 +146,7 @@
       if (!fichier.type.startsWith('image/')) continue;
       try {
         const base64 = await lireEnBase64(fichier);
-        Studio.ajouterPhoto(album.id, base64, fichier.name);
+        Studio.ajouterPhotoParId(album.id, base64, fichier.name);
         nbOk++;
       } catch (e) {
         console.warn('[AF] Erreur import:', e);
@@ -184,7 +184,7 @@
       const album = creerAlbumSiBesoin();
       rep.images.forEach((b64, i) => {
         const dataUrl = b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64;
-        Studio.ajouterPhoto(album.id, dataUrl, 'vinted-' + (i + 1) + '.jpg');
+        Studio.ajouterPhotoParId(album.id, dataUrl, 'vinted-' + (i + 1) + '.jpg');
       });
 
       rafraichirGalerie();
@@ -303,9 +303,9 @@
         if (Array.isArray(ops) && ops.length > 0) {
           for (const op of ops) {
             if (op.type === 'redresser' && op.degres) {
-              Studio.redresser(albumActif.id, photo.id, op.degres);
+              Studio.redresserParId(albumActif.id, photo.id, op.degres);
             } else if (op.type === 'regler') {
-              Studio.regler(albumActif.id, photo.id, op.luminosite || 0, op.contraste || 0, op.saturation || 0);
+              Studio.reglerParId(albumActif.id, photo.id, op.luminosite || 0, op.contraste || 0, op.saturation || 0);
             }
           }
           nbAmeliorees++;
@@ -394,7 +394,7 @@
     if (!photoActive || !albumActif) return;
     const angle = parseFloat($('#angle').value);
     if (Math.abs(angle) < 0.1) return;
-    Studio.redresser(albumActif.id, photoActive.id, angle);
+    Studio.redresserParId(albumActif.id, photoActive.id, angle);
     rafraichirGalerie();
     afficherApercu('apres');
     cacherPanneauxRetouche();
@@ -411,7 +411,7 @@
     const lum = parseInt($('#lum').value, 10);
     const contraste = parseInt($('#contraste').value, 10);
     const saturation = parseInt($('#saturation').value, 10);
-    Studio.regler(albumActif.id, photoActive.id, lum, contraste, saturation);
+    Studio.reglerParId(albumActif.id, photoActive.id, lum, contraste, saturation);
     rafraichirGalerie();
     afficherApercu('apres');
     cacherPanneauxRetouche();
@@ -421,7 +421,7 @@
   // Fond
   function retirerFond(couleur) {
     if (!photoActive || !albumActif) return;
-    Studio.retirerFond(albumActif.id, photoActive.id, couleur);
+    Studio.retirerFondParId(albumActif.id, photoActive.id, couleur);
     rafraichirGalerie();
     afficherApercu('apres');
     cacherPanneauxRetouche();
@@ -434,9 +434,9 @@
   // Mannequin IA (désactivé jusqu'à validation budget)
   $('#mannequin').addEventListener('click', async () => {
     if (!photoActive || !albumActif) return;
-    // Studio.demanderMannequin existe mais retourne une promesse rejetée car pas de service configuré
+    // Studio.demanderMannequinParId retourne une promesse rejetée car pas de service configuré
     try {
-      await Studio.demanderMannequin(albumActif.id, photoActive.id);
+      await Studio.demanderMannequinParId(albumActif.id, photoActive.id);
       rafraichirGalerie();
       afficherApercu('apres');
       afficherStatut('Mannequin appliqué.', 'succes');
@@ -502,7 +502,7 @@
         return;
       }
 
-      Studio.recadrer(albumActif.id, photoActive.id, { x, y, w, h });
+      Studio.recadrerParId(albumActif.id, photoActive.id, { x, y, w, h });
       recadrageEnCours = null;
       rafraichirGalerie();
       afficherApercu('apres');
@@ -1120,7 +1120,7 @@ Analyse les photos et génère une annonce complète au format JSON avec :
       const album = creerAlbumSiBesoin();
       rep.images.forEach((b64, i) => {
         const dataUrl = b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64;
-        Studio.ajouterPhoto(album.id, dataUrl, 'vinted-' + (i + 1) + '.jpg');
+        Studio.ajouterPhotoParId(album.id, dataUrl, 'vinted-' + (i + 1) + '.jpg');
       });
       rafraichirGalerie();
 
