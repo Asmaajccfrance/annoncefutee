@@ -26,7 +26,20 @@
   const CHAMPS_REMPLACABLES = ['titre', 'description', 'prix'];
 
   // ========== ÉTAT ==========
-  const etat = { albumId: null, photoActiveId: null, retouche: null, recadrage: null, section: 'dashboard' };
+  const etat = { photoActiveId: null, retouche: null, recadrage: null, section: 'dashboard' };
+
+  // L'atelier est UN SEUL objet, créé au démarrage et jamais absent : `atelier.album` est toujours un album
+  // valide (Studio.creerAlbum). Il n'est remplacé que par des fonctions pures de Studio, qui retournent un
+  // album complet ou lèvent une erreur (l'ancien album reste alors intact). Il n'existe plus d'identifiant
+  // d'album à garder synchronisé avec un registre caché : c'était la source de l'erreur « reading 'photos' ».
+  const atelier = {
+    album: Studio.creerAlbum(),
+    pret: false,               // vrai quand les photos mémorisées ont été relues (rechargement du panneau)
+    restauration: null,        // { restaurees, ignorees } après une relecture du stockage
+    nonCopiees: 0              // photos Vinted que l'atelier plein n'a pas pu recevoir
+  };
+  let resoudrePretAtelier;
+  const pretAtelier = new Promise((resolve) => { resoudrePretAtelier = resolve; });
   let brouillons = [];
   let reglages = {
     autoGenerer: false, autoRemplir: true, limiteAuto: 10, consentementIA: false, claudeExplicite: false,
@@ -40,6 +53,7 @@
       tabId: tabId,
       hashPage: '',
       enChargement: 0,
+      detectees: 0,            // photos vues sur la page Vinted (prêtes ou non), récupérées ou non
       photos: [],              // [{ fp, b64 }] : photos prêtes du formulaire
       cle: '',                 // empreinte de l'ensemble des photos prêtes
       etapes: {},              // photos | pretes | analyse | annonce | remplissage
@@ -215,44 +229,215 @@
   }
 
   // ========== ATELIER (album de photos) ==========
-  function assurerAlbum() {
-    if (!etat.albumId) etat.albumId = Studio.creerAlbumAvecId('Atelier').id;
-    return etat.albumId;
+  const MSG_ATELIER_PLEIN = 'Huit photos au maximum dans l\'atelier.';
+  const photosAlbum = () => atelier.album.photos;
+  const photoActive = () => photosAlbum().find((p) => p.id === etat.photoActiveId) || null;
+  const estSelectionnee = (id) => atelier.album.selection.indexOf(id) >= 0;
+
+  // Applique une retouche (non destructive : la photo d'origine `source` n'est jamais modifiée) ;
+  // lève une erreur explicite si la photo n'existe plus ou si la retouche n'est pas applicable.
+  function retoucherPhoto(photoId, op) {
+    atelier.album = Studio.avecOperation(atelier.album, photoId, op);
   }
 
-  function photosAlbum() {
-    return etat.albumId ? Studio.listerPhotos(etat.albumId) : [];
-  }
-
-  function photoActive() {
-    return photosAlbum().find((p) => p.id === etat.photoActiveId) || null;
+  function retirerPhotoDeLAtelier(photoId) {
+    atelier.album = Studio.retirerPhoto(atelier.album, photoId);
+    fpParPhoto.delete(photoId);
+    groupeParPhoto.delete(photoId);
+    photosAmeliorees.delete(photoId);
+    originauxStockes.delete(photoId);
+    if (etat.photoActiveId === photoId) etat.photoActiveId = null;
   }
 
   async function ajouterDepuisUrl(url, nom, origine) {
-    const id = assurerAlbum();
-    if (photosAlbum().length >= Studio.MAX_ATELIER) throw new Error('Huit photos au maximum dans l\'atelier.');
+    if (photosAlbum().length >= Studio.MAX_ATELIER) throw new Error(MSG_ATELIER_PLEIN);
     const pixels = await urlVersPixels(url);
-    const album = Studio.ajouterPhotoParId(id, pixels, nom);
-    const photo = album.photos[album.photos.length - 1];
+    // L'album peut avoir changé pendant le chargement de l'image : on repart de l'état courant.
+    atelier.album = Studio.ajouterPhoto(atelier.album, pixels, nom);
+    const photo = atelier.album.photos[atelier.album.photos.length - 1];
     if (origine) fpParPhoto.set(photo.id, origine);
     return photo;
   }
 
   const photosManuelles = () => photosAlbum().filter((p) => !fpParPhoto.has(p.id));
 
+  // ========== ERREURS : jamais silencieuses ==========
+  function signalerErreur(contexte, err) {
+    console.error('[AF] ' + contexte + ' :', err);
+    const detail = (err && err.message ? err.message : String(err)).replace(/\.?\s*$/, '.');
+    afficherStatut(contexte + ' : ' + detail + ' Tes photos d\'origine ne sont pas modifiées.', 'erreur');
+  }
+
+  // Exécute une action d'interface ; toute exception (synchrone ou asynchrone) est affichée, jamais perdue.
+  function garder(contexte, action) {
+    try {
+      const r = action();
+      if (r && typeof r.catch === 'function') r.catch((e) => signalerErreur(contexte, e));
+      return r;
+    } catch (e) {
+      signalerErreur(contexte, e);
+      return undefined;
+    }
+  }
+
+  window.addEventListener('error', (e) => signalerErreur('Erreur inattendue', e.error || e.message));
+  window.addEventListener('unhandledrejection', (e) => signalerErreur('Erreur inattendue', e.reason));
+
+  // ========== MÉMORISATION DE L'ATELIER (photos importées à la main) ==========
+  // Les photos du formulaire Vinted ne sont jamais mémorisées : elles sont relues sur la page. Seules les
+  // photos importées par l'utilisateur le sont (copie d'origine ≤ 1024 px + liste des retouches appliquées,
+  // jamais le résultat retouché), pour survivre à la fermeture ou au rechargement du panneau.
+  const VERSION_ATELIER = 2;
+  const originauxStockes = new Map();   // id photo atelier -> data URL de la photo d'origine mémorisée
+  let fileAtelier = Promise.resolve();
+
+  function urlOriginale(photo) {
+    if (!originauxStockes.has(photo.id)) originauxStockes.set(photo.id, pixelsVersUrl(photo.source, 0.92));
+    return originauxStockes.get(photo.id);
+  }
+
+  function sauvegarderAtelier() {
+    fileAtelier = fileAtelier.then(async () => {
+      try {
+        const donnees = {
+          version: VERSION_ATELIER,
+          photos: photosManuelles().map((p) => ({
+            nom: p.nom,
+            original: urlOriginale(p),
+            operations: p.operations,
+            auto: photosAmeliorees.has(p.id)
+          }))
+        };
+        await chrome.storage.local.set({ atelier: donnees });
+      } catch (e) {
+        console.warn('[AF] Atelier non mémorisé :', e);
+        afficherStatut('Atelier non mémorisé (espace insuffisant ?) : tes photos restent dans le panneau mais ne survivront pas à sa fermeture.', 'erreur');
+      }
+    });
+    return fileAtelier;
+  }
+
+  const URL_IMAGE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+
+  // Relit les photos mémorisées. Les entrées illisibles (format d'une ancienne version, données corrompues)
+  // sont comptées et signalées, jamais ignorées en silence ni cause d'erreur.
+  async function chargerAtelier() {
+    let ignorees = 0;
+    let restaurees = 0;
+    try {
+      const stocke = (await lire(['atelier'])).atelier;
+      if (stocke !== undefined) {
+        const entrees = stocke && typeof stocke === 'object' && Array.isArray(stocke.photos) ? stocke.photos : null;
+        if (!entrees) ignorees = 1;
+        for (const e of entrees || []) {
+          if (!e || typeof e !== 'object' || typeof e.original !== 'string' || !URL_IMAGE.test(e.original)) { ignorees++; continue; }
+          try {
+            const photo = await ajouterDepuisUrl(e.original, typeof e.nom === 'string' ? e.nom : 'photo', null);
+            originauxStockes.set(photo.id, e.original);
+            let refaites = 0;
+            for (const op of Array.isArray(e.operations) ? e.operations : []) {
+              try { retoucherPhoto(photo.id, op); refaites++; } catch (err) { /* retouche d'une ancienne version : abandonnée */ }
+            }
+            if (e.auto && refaites) photosAmeliorees.add(photo.id);
+            restaurees++;
+          } catch (err) {
+            ignorees++;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[AF] Relecture de l\'atelier :', err);
+      ignorees++;
+    }
+    atelier.restauration = { restaurees: restaurees, ignorees: ignorees };
+    atelier.pret = true;
+    resoudrePretAtelier();
+    if (ignorees) {
+      afficherStatut(ignorees + ' photo' + (ignorees > 1 ? 's' : '') + ' mémorisée' + (ignorees > 1 ? 's' : '') + ' illisible' + (ignorees > 1 ? 's' : '') + ' (ancienne version ou données abîmées) : ignorée' + (ignorees > 1 ? 's' : '') + '. Réimporte-la' + (ignorees > 1 ? 's' : '') + ' si besoin.', 'info');
+    }
+  }
+
+  // Explique précisément pourquoi l'atelier est vide (aucun message vague, aucun faux « tout va bien »).
+  function explicationAucunePhoto() {
+    const L = live;
+    if (L.tabId !== null && L.enChargement > 0) {
+      return L.enChargement + ' photo' + (L.enChargement > 1 ? 's' : '') + ' du formulaire Vinted ' + (L.enChargement > 1 ? 'sont' : 'est') + ' encore en chargement. Réessaie dans un instant.';
+    }
+    if (L.tabId !== null && L.detectees > 0) {
+      return L.detectees + ' photo' + (L.detectees > 1 ? 's' : '') + ' détectée' + (L.detectees > 1 ? 's' : '') + ' sur Vinted mais pas encore récupérée' + (L.detectees > 1 ? 's' : '') + '. Clique sur « Depuis Vinted ».';
+    }
+    if (L.tabId !== null) {
+      return 'Aucune photo : le formulaire Vinted n\'en contient pas encore. Ajoute une photo sur Vinted ou importe-en depuis ton ordinateur.';
+    }
+    return 'Aucune photo disponible. Importe des photos depuis ton ordinateur ou ouvre « Vendre un article » sur Vinted.';
+  }
+
+  // Retouches automatiques sur une liste de photos. Une photo n'est traitée qu'une fois (sauf si ses retouches
+  // sont toutes annulées). Chaque retouche non applicable est rapportée, jamais avalée.
+  function ameliorerPhotos(photos) {
+    const bilan = { ameliorees: 0, correctes: 0, dejaTraitees: 0, echecs: [] };
+    for (const demandee of photos) {
+      const photo = photosAlbum().find((p) => p.id === demandee.id);
+      if (!photo) { bilan.echecs.push({ nom: demandee.nom, message: 'photo retirée entre-temps' }); continue; }
+      if (photosAmeliorees.has(photo.id)) { bilan.dejaTraitees++; continue; }
+      let ops;
+      try {
+        ops = Batch.ameliorerPhotoAuto(photo, Studio);
+      } catch (e) {
+        bilan.echecs.push({ nom: photo.nom, message: e.message || 'analyse impossible' });
+        continue;
+      }
+      photosAmeliorees.add(photo.id);
+      let appliquees = 0;
+      for (const op of ops) {
+        try {
+          retoucherPhoto(photo.id, op);
+          appliquees++;
+        } catch (e) {
+          bilan.echecs.push({ nom: photo.nom, message: 'retouche « ' + op.type + ' » non applicable (' + (e.message || 'erreur') + ')' });
+        }
+      }
+      if (appliquees) bilan.ameliorees++; else bilan.correctes++;
+    }
+    return bilan;
+  }
+
   // ========== PERSISTANCE DES BROUILLONS ==========
   async function chargerBrouillons() {
     try {
       const data = await lire(['brouillons']);
       const liste = Array.isArray(data.brouillons) ? data.brouillons : [];
-      brouillons = liste.filter(Boolean).map((b) => {
-        const { photos, photoUrl, ...reste } = b;
-        if (!reste.vignette && typeof photoUrl === 'string' && photoUrl.length < 40000) reste.vignette = photoUrl;
-        return reste;
-      });
+      brouillons = liste.map(normaliserBrouillon).filter(Boolean);
+      const abandonnes = liste.length - brouillons.length;
+      if (abandonnes > 0) console.warn('[AF] ' + abandonnes + ' brouillon(s) illisible(s) ignoré(s) (format inconnu).');
     } catch (e) {
       brouillons = [];
     }
+  }
+
+  // Remet à la forme actuelle un brouillon enregistré par une ancienne version : les photos intégrées
+  // (data URL volumineuses) disparaissent, seule une vignette reste ; les champs manquants reçoivent
+  // une valeur neutre. Une entrée qui n'est pas un brouillon est écartée (jamais une erreur).
+  function normaliserBrouillon(b) {
+    if (!b || typeof b !== 'object' || Array.isArray(b)) return null;
+    const { photos, photoUrl, ...reste } = b;
+    const texte = (v) => (typeof v === 'string' ? v : (v === null || v === undefined ? '' : String(v)));
+    const out = Object.assign({}, reste);
+    out.id = typeof reste.id === 'string' || typeof reste.id === 'number' ? reste.id : Batch.nouvelId();
+    ['titre', 'description', 'categorie', 'sousCategorie', 'marque', 'taille', 'etat', 'matiere', 'precisions', 'cle', 'plateforme']
+      .forEach((k) => { out[k] = texte(reste[k]); });
+    out.couleurs = Array.isArray(reste.couleurs) ? reste.couleurs.map(texte) : [];
+    out.aVerifier = Array.isArray(reste.aVerifier) ? reste.aVerifier.map(texte) : [];
+    out.prix = Number.isFinite(Number(reste.prix)) && Number(reste.prix) > 0 ? Math.round(Number(reste.prix)) : null;
+    out.statut = typeof reste.statut === 'string' && reste.statut ? reste.statut : 'brouillon';
+    out.plateforme = out.plateforme || 'vinted';
+    out.dateCreation = Number(reste.dateCreation) || 0;
+    out.dateModification = Number(reste.dateModification) || out.dateCreation;
+    out.nbPhotos = Number(reste.nbPhotos) || 0;
+    out.vignette = typeof reste.vignette === 'string' && reste.vignette
+      ? reste.vignette
+      : (typeof photoUrl === 'string' && photoUrl.length < 40000 ? photoUrl : '');
+    return out;
   }
 
   async function sauvegarderBrouillons() {
@@ -534,15 +719,13 @@
     return null;
   }
 
-  function retirerPhotosVintedDeLAtelier(tabId, garder) {
-    if (!etat.albumId) return;
+  // Retire de l'atelier les copies de photos Vinted disparues du formulaire (supprimées ou remplacées).
+  // Ce ne sont que des copies de travail : l'original reste dans le formulaire Vinted.
+  function retirerPhotosVintedDeLAtelier(tabId, aGarder) {
     for (const [photoId, origine] of Array.from(fpParPhoto.entries())) {
       if (origine.tabId !== tabId) continue;
-      if (garder && garder.has(origine.fp)) continue;
-      Studio.supprimerPhoto(etat.albumId, photoId);
-      fpParPhoto.delete(photoId);
-      photosAmeliorees.delete(photoId);
-      if (etat.photoActiveId === photoId) etat.photoActiveId = null;
+      if (aGarder && aGarder.has(origine.fp)) continue;
+      retirerPhotoDeLAtelier(photoId);
     }
   }
 
@@ -556,6 +739,8 @@
     syncEnCours = true;
     return (async () => {
       try {
+        // Pas de synchronisation avant que l'atelier mémorisé soit relu (sinon les photos se mélangeraient).
+        await pretAtelier;
         do {
           syncDemandee = false;
           const force = syncForcee;
@@ -597,6 +782,7 @@
       return;
     }
     const chargement = info.enChargement || 0;
+    L.detectees = (Number(info.photos) || 0) + chargement;
     const memeEnsemble = info.hash === L.hashPage;
     if (!force && memeEnsemble && chargement === L.enChargement) return;
     const etaitEnChargement = L.enChargement > 0;
@@ -637,15 +823,19 @@
 
     retirerPhotosVintedDeLAtelier(tabId, new Set(fps));
     const connues = new Set(Array.from(fpParPhoto.values()).filter((o) => o.tabId === tabId).map((o) => o.fp));
+    let nonCopiees = 0;
     for (let i = 0; i < images.length; i++) {
       if (connues.has(fps[i])) continue;
       try {
         await ajouterDepuisUrl('data:image/jpeg;base64,' + images[i], 'vinted-' + (i + 1) + '.jpg', { fp: fps[i], tabId: tabId });
         connues.add(fps[i]);
       } catch (e) {
+        nonCopiees++;
         console.warn('[AF] Photo non ajoutée à l\'atelier :', e.message);
       }
     }
+    // L'analyse utilise de toute façon les photos du formulaire ; seule la copie de travail manque.
+    atelier.nonCopiees = nonCopiees;
 
     L.photos = images.map((b64, i) => ({ fp: fps[i], b64: b64 }));
     L.cle = cle;
@@ -785,21 +975,15 @@
 
   // Retouches automatiques adaptées à chaque photo (une seule fois par photo)
   function ameliorerPhotosVinted(L) {
-    let appliquees = 0;
-    for (const photo of photosAlbum()) {
+    const concernees = photosAlbum().filter((photo) => {
       const origine = fpParPhoto.get(photo.id);
-      if (!origine || origine.tabId !== L.tabId || photosAmeliorees.has(photo.id)) continue;
-      photosAmeliorees.add(photo.id);
-      let ops = [];
-      try { ops = Batch.ameliorerPhotoAuto(photo, Studio); } catch (e) { ops = []; }
-      for (const op of ops) {
-        try {
-          Studio.avecOperationParId(etat.albumId, photo.id, op);
-          appliquees++;
-        } catch (e) { /* retouche non applicable à cette photo */ }
-      }
-    }
-    return appliquees;
+      return origine && origine.tabId === L.tabId && estSelectionnee(photo.id);
+    });
+    const nbAvant = concernees.reduce((n, p) => n + p.operations.length, 0);
+    const bilan = ameliorerPhotos(concernees);
+    bilan.echecs.forEach((e) => console.warn('[AF] Retouche automatique :', e.nom, e.message));
+    const nbApres = photosAlbum().filter((p) => concernees.some((c) => c.id === p.id)).reduce((n, p) => n + p.operations.length, 0);
+    return nbApres - nbAvant;
   }
 
   function imagesPourIA(L) {
@@ -1096,7 +1280,8 @@
   // ========== PHOTOS ==========
   async function importerFichiers(fichiers) {
     const liste = Array.from(fichiers || []).filter((f) => f.type && f.type.startsWith('image/'));
-    if (!liste.length) return;
+    if (!liste.length) { afficherStatut('Aucune image reconnue : choisis des fichiers JPEG, PNG ou WebP.', 'info'); return; }
+    await pretAtelier;
     let ok = 0;
     let derniereErreur = '';
     for (const f of liste) {
@@ -1108,39 +1293,69 @@
       }
     }
     rafraichirGalerie();
-    if (ok) afficherStatut(ok + ' photo' + (ok > 1 ? 's' : '') + ' importée' + (ok > 1 ? 's' : '') + '.', 'succes');
+    if (ok) { afficherStatut(ok + ' photo' + (ok > 1 ? 's' : '') + ' importée' + (ok > 1 ? 's' : '') + '.', 'succes'); sauvegarderAtelier(); }
     if (derniereErreur) afficherStatut(derniereErreur, 'erreur');
+  }
+
+  // Message d'état de la galerie : toujours explicite quand rien n'est disponible ou rien n'est prêt.
+  function infoGalerie() {
+    const L = live;
+    const nbVinted = photosAlbum().filter((p) => fpParPhoto.has(p.id)).length;
+    if (!photosAlbum().length) return explicationAucunePhoto();
+    if (L.tabId !== null && L.enChargement > 0) {
+      return L.enChargement + ' photo' + (L.enChargement > 1 ? 's' : '') + ' Vinted en cours de chargement : elle' + (L.enChargement > 1 ? 's apparaîtront' : ' apparaîtra') + ' ici dès qu\'elle' + (L.enChargement > 1 ? 's seront prêtes.' : ' sera prête.');
+    }
+    if (L.tabId !== null && L.detectees > nbVinted && atelier.nonCopiees === 0) {
+      return (L.detectees - nbVinted) + ' photo' + (L.detectees - nbVinted > 1 ? 's' : '') + ' de Vinted pas encore récupérée' + (L.detectees - nbVinted > 1 ? 's' : '') + ' : clique sur « Depuis Vinted ».';
+    }
+    if (atelier.nonCopiees > 0) {
+      return 'Atelier plein (8 photos) : ' + atelier.nonCopiees + ' photo' + (atelier.nonCopiees > 1 ? 's' : '') + ' Vinted non copiée' + (atelier.nonCopiees > 1 ? 's' : '') + ' ici. Retire une photo pour les récupérer.';
+    }
+    return '';
   }
 
   function rafraichirGalerie() {
     const galerie = $('#galerie');
     galerie.innerHTML = '';
     const photos = photosAlbum();
-    $('#compteur-photos').textContent = photos.length + ' photo' + (photos.length !== 1 ? 's' : '');
+    if (etat.photoActiveId && !photos.some((p) => p.id === etat.photoActiveId)) etat.photoActiveId = null;
+    const nbSel = photos.filter((p) => estSelectionnee(p.id)).length;
+    $('#compteur-photos').textContent = photos.length + ' photo' + (photos.length !== 1 ? 's' : '') +
+      (photos.length ? ' · ' + nbSel + ' sélectionnée' + (nbSel > 1 ? 's' : '') : '');
     $('#vers-creation').hidden = photosManuelles().length === 0;
+    $('#ameliorer-auto-nb').textContent = photos.length ? '(' + nbSel + ')' : '';
+    const info = infoGalerie();
+    const zoneInfo = $('#galerie-info');
+    zoneInfo.textContent = info;
+    zoneInfo.hidden = !info;
 
     photos.forEach((photo, i) => {
       const div = document.createElement('div');
-      div.className = 'vignette' + (photo.id === etat.photoActiveId ? ' active' : '');
+      div.className = 'vignette' + (photo.id === etat.photoActiveId ? ' active' : '') + (estSelectionnee(photo.id) ? ' selectionnee' : '');
+      div.dataset.id = photo.id;
       div.title = fpParPhoto.has(photo.id) ? 'Photo du formulaire Vinted' : 'Photo importée';
       div.innerHTML =
         '<img src="' + urlPhoto(photo) + '" alt="Photo ' + (i + 1) + '">' +
         '<span class="vignette-badge">' + (i + 1) + '</span>' +
+        (photo.operations.length ? '<span class="vignette-retouchee" title="Retouchée (l\'original est conservé)">✎</span>' : '') +
+        '<button type="button" class="vignette-coche" role="checkbox" aria-checked="' + estSelectionnee(photo.id) + '" title="Sélectionner pour l\'amélioration automatique">' + (estSelectionnee(photo.id) ? '✓' : '') + '</button>' +
         '<button type="button" class="vignette-suppr" title="Retirer de l\'atelier">×</button>';
-      div.addEventListener('click', (e) => {
+      div.addEventListener('click', (e) => garder('Galerie', () => {
         if (e.target.classList.contains('vignette-suppr')) {
-          Studio.supprimerPhoto(etat.albumId, photo.id);
-          fpParPhoto.delete(photo.id);
-          groupeParPhoto.delete(photo.id);
-          if (etat.photoActiveId === photo.id) {
-            etat.photoActiveId = null;
-            $('#apercu-container').hidden = true;
-          }
+          if (!fpParPhoto.has(photo.id) && !confirm('Retirer cette photo de l\'atelier ? La copie mémorisée par l\'extension sera supprimée (ton fichier d\'origine sur ton ordinateur n\'est pas touché).')) return;
+          retirerPhotoDeLAtelier(photo.id);
+          if (!photoActive()) $('#apercu-container').hidden = true;
+          rafraichirGalerie();
+          sauvegarderAtelier();
+          return;
+        }
+        if (e.target.classList.contains('vignette-coche')) {
+          atelier.album = Studio.basculerSelection(atelier.album, photo.id);
           rafraichirGalerie();
           return;
         }
         selectionnerPhoto(photo.id);
-      });
+      }));
       galerie.appendChild(div);
     });
     if (!photoActive()) $('#apercu-container').hidden = true;
@@ -1149,7 +1364,7 @@
   function selectionnerPhoto(id) {
     etat.photoActiveId = id;
     cacherPanneauxRetouche();
-    $$('.vignette').forEach((v, i) => v.classList.toggle('active', photosAlbum()[i] && photosAlbum()[i].id === id));
+    $$('.vignette').forEach((v) => v.classList.toggle('active', v.dataset.id === id));
     $('#apercu-container').hidden = false;
     const photo = photoActive();
     $('#apercu-nom').textContent = photo ? photo.nom : 'Photo';
@@ -1186,23 +1401,36 @@
   });
   $('#recuperer-vinted').addEventListener('click', recupererDepuisVinted);
 
-  $('#ameliorer-auto').addEventListener('click', () => {
+  // Traite les photos SÉLECTIONNÉES de l'atelier (toutes le sont par défaut) et rend compte photo par photo.
+  $('#ameliorer-auto').addEventListener('click', () => garder('Amélioration automatique', () => {
     const photos = photosAlbum();
-    if (!photos.length) { afficherStatut('Importe des photos d\'abord.', 'info'); return; }
-    let nb = 0;
-    for (const photo of photos) {
-      if (photosAmeliorees.has(photo.id)) continue;
-      photosAmeliorees.add(photo.id);
-      let appliquee = false;
-      for (const op of Batch.ameliorerPhotoAuto(photo, Studio)) {
-        try { Studio.avecOperationParId(etat.albumId, photo.id, op); appliquee = true; } catch (e) { /* ignoré */ }
-      }
-      if (appliquee) nb++;
+    if (!photos.length) {
+      afficherStatut(explicationAucunePhoto(), 'info');
+      rafraichirGalerie();
+      return;
     }
+    const choisies = photos.filter((p) => estSelectionnee(p.id));
+    if (!choisies.length) {
+      afficherStatut('Aucune photo sélectionnée : coche au moins une photo (case en bas à gauche de la vignette).', 'info');
+      return;
+    }
+    const bilan = ameliorerPhotos(choisies);
     rafraichirGalerie();
     if (photoActive()) afficherApercu('apres');
-    afficherStatut(nb ? nb + ' photo(s) améliorée(s).' : 'Photos déjà correctes, rien à améliorer.', nb ? 'succes' : 'info');
-  });
+    sauvegarderAtelier();
+
+    const parties = [];
+    if (bilan.ameliorees) parties.push(bilan.ameliorees + ' améliorée' + (bilan.ameliorees > 1 ? 's' : ''));
+    if (bilan.correctes) parties.push(bilan.correctes + ' déjà correcte' + (bilan.correctes > 1 ? 's' : ''));
+    if (bilan.dejaTraitees) parties.push(bilan.dejaTraitees + ' déjà traitée' + (bilan.dejaTraitees > 1 ? 's' : ''));
+    let texte = choisies.length + ' photo' + (choisies.length > 1 ? 's' : '') + ' sélectionnée' + (choisies.length > 1 ? 's' : '') +
+      (parties.length ? ' : ' + parties.join(', ') : '') + '. Les originaux sont conservés (bouton « Annuler »).';
+    if (bilan.echecs.length) {
+      texte += ' ' + bilan.echecs.length + ' problème' + (bilan.echecs.length > 1 ? 's' : '') + ' : ' +
+        bilan.echecs.map((e) => e.nom + ' (' + e.message + ')').join(' ; ') + '.';
+    }
+    afficherStatut(texte, bilan.echecs.length ? 'erreur' : (bilan.ameliorees ? 'succes' : 'info'));
+  }));
 
   // ========== RETOUCHES MANUELLES ==========
   const PANNEAUX = { recadrer: '#btn-recadrer', redresser: '#btn-redresser', lumiere: '#btn-lumiere', fond: '#btn-fond' };
@@ -1236,7 +1464,7 @@
     const photo = photoActive();
     if (!photo) return;
     try {
-      Studio.avecOperationParId(etat.albumId, photo.id, op);
+      retoucherPhoto(photo.id, op);
     } catch (e) {
       afficherStatut(e.message || 'Retouche impossible.', 'erreur');
       return;
@@ -1244,6 +1472,7 @@
     cacherPanneauxRetouche();
     rafraichirGalerie();
     afficherApercu('apres');
+    sauvegarderAtelier();
     afficherStatut(succes, 'succes');
   }
 
@@ -1255,9 +1484,13 @@
   $('#btn-annuler').addEventListener('click', () => {
     const photo = photoActive();
     if (!photo) return;
-    Studio.annulerParId(etat.albumId, photo.id);
-    photosAmeliorees.add(photo.id);
+    atelier.album = Studio.annuler(atelier.album, photo.id);
+    // Toutes les retouches annulées : la photo est de nouveau celle d'origine et peut être re-traitée.
+    const apres = photosAlbum().find((p) => p.id === photo.id);
+    if (apres && !apres.operations.length) photosAmeliorees.delete(photo.id);
+    else photosAmeliorees.add(photo.id);
     rafraichirGalerie();
+    sauvegarderAtelier();
     afficherApercu('apres');
     afficherStatut('Dernière retouche annulée.', 'info');
   });
@@ -1299,7 +1532,8 @@
     const photo = photoActive();
     if (!photo) return;
     try {
-      await Studio.demanderMannequinParId(etat.albumId, photo.id);
+      const demande = Studio.demanderMannequin(photo);
+      if (!demande.ok) throw new Error(demande.message || 'Mannequin non disponible.');
     } catch (e) {
       afficherStatut(e.message || 'Mannequin non disponible.', 'erreur');
     }
@@ -1739,15 +1973,19 @@
 
   // ========== DÉMARRAGE ==========
   try { $('#version').textContent = chrome.runtime.getManifest().version; } catch (e) { /* version inconnue */ }
+  // La vue initiale est affichée tout de suite : si l'utilisateur change d'onglet pendant le chargement
+  // des données, sa navigation n'est jamais écrasée (les vues sont simplement rafraîchies à la fin).
+  naviguerVers('dashboard');
   await chargerReglages();
   await chargerBrouillons();
   brouillons.forEach((b) => { if (b.cle) analysesTentees.add(b.cle); });
-  naviguerVers('dashboard');
+  await chargerAtelier();
+  rafraichirVues();
   const compteLocal = await lire(['backendToken', 'backendEmail']);
   if (compteLocal.backendToken) {
     compte = { connected: true, email: compteLocal.backendEmail || '', credits: null };
     majCompteUI();
-    actualiserCompte();
+    garder('Lecture du compte', () => actualiserCompte());
   }
   synchroniser(true);
 })();

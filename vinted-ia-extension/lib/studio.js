@@ -414,6 +414,23 @@
     return { photos: album.photos, selection: selection, active: active };
   }
 
+  // Retire une photo de l'album (action explicite de l'utilisateur ou photo disparue du formulaire Vinted).
+  function retirerPhoto(album, id) {
+    const photos = album.photos.filter((p) => p.id !== id);
+    const selection = album.selection.filter((x) => x !== id);
+    const active = album.active === id ? (selection[0] || photos[0]?.id || '') : album.active;
+    return { photos: photos, selection: selection, active: active };
+  }
+
+  // Coche / décoche une photo dans la sélection (sans toucher aux autres).
+  function basculerSelection(album, id) {
+    if (!album.photos.some((p) => p.id === id)) return album;
+    const selection = album.selection.indexOf(id) >= 0
+      ? album.selection.filter((x) => x !== id)
+      : album.selection.concat([id]);
+    return { photos: album.photos, selection: selection, active: album.active };
+  }
+
   function activer(album, id) {
     if (!album.photos.some((p) => p.id === id)) return album;
     return { photos: album.photos, selection: album.selection, active: id };
@@ -581,9 +598,11 @@
   }
 
   // Liste les photos d'un album par son ID
+  // Un identifiant inconnu est une erreur explicite (jamais une liste vide qui masquerait l'incohérence).
   function listerPhotos(albumId) {
     const album = albumsParId.get(albumId);
-    return album ? (album.photos || []) : [];
+    if (!album) throw new Error('Album introuvable.');
+    return album.photos;
   }
 
   // Ajoute une photo à un album par son ID
@@ -678,6 +697,8 @@
     creerAlbum: creerAlbum,
     ajouterPhoto: ajouterPhoto,
     definirSelection: definirSelection,
+    retirerPhoto: retirerPhoto,
+    basculerSelection: basculerSelection,
     activer: activer,
     deplacerPhoto: deplacerPhoto,
     rendre: rendre,

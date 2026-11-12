@@ -2,7 +2,7 @@
   "name": "vinted-ia",
   "private": true,
   "scripts": {
-    "test": "node --test tests/core.test.js tests/studio.test.js tests/background.test.js tests/content.test.js tests/sidepanel.test.js",
+    "test": "node --test tests/core.test.js tests/studio.test.js tests/studio-atelier.test.js tests/background.test.js tests/content.test.js tests/sidepanel.test.js tests/atelier.test.js",
     "diagnostic": "node scripts/diagnostic-serveur.mjs"
   },
   "devDependencies": {
