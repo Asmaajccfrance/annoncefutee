@@ -217,6 +217,11 @@ test('les messages ne sont acceptés que depuis la bonne origine', () => {
   assert.equal(IA.autoriserMessage('authLogin', page, EXT), false);
   assert.equal(IA.autoriserMessage('authLogout', options, EXT), true);
   assert.equal(IA.autoriserMessage('getAccount', page, EXT), false);
+  assert.equal(IA.autoriserMessage('cancelGenerate', panneau, EXT), true);
+  assert.equal(IA.autoriserMessage('cancelGenerate', page, EXT), false);
+  assert.equal(IA.autoriserMessage('cancelGenerate', options, EXT), false);
+  assert.equal(IA.autoriserMessage('pingServeur', panneau, EXT), true);
+  assert.equal(IA.autoriserMessage('pingServeur', page, EXT), false);
 });
 
 test('une session serveur est prioritaire et ne transmet jamais la clé Claude', () => {
@@ -283,8 +288,9 @@ test('le jeton ne quitte pas l\'origine contrôlée', () => {
   assert.equal(appel.includes('backendToken'), false);
   assert.equal(appel.includes('authorization'), false);
   assert.equal((source.match(/authorization: 'Bearer ' \+ reglages\.backendToken/g) || []).length, 3);
-  assert.equal((source.match(/redirect: 'error'/g) || []).length, 4);
-  assert.equal((source.match(/credentials: 'omit'/g) || []).length, 5);
+  // 4 appels authentifiés ou de connexion + 2 requêtes du diagnostic (sans jeton, sans identifiant)
+  assert.equal((source.match(/redirect: 'error'/g) || []).length, 6);
+  assert.equal((source.match(/credentials: 'omit'/g) || []).length, 7);
   assert.equal(source.includes("if (IA.choisirMoteur(reglages) === 'backend')"), true);
 });
 

@@ -966,3 +966,18 @@ textarea {
 .champ-ligne.echec .champ-etat { color: var(--rouge); }
 .champ-ligne.a_choisir .champ-etat, .champ-ligne.manuel .champ-etat { color: var(--violet); }
 .champ-ligne.absent .champ-etat { color: var(--gris-500); }
+
+/* BILAN, PRÉCISIONS, REGROUPEMENTS */
+.live-bilan { list-style: none; margin: 0 0 10px; padding: 0; font-size: 0.8rem; }
+.live-bilan li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--gris-200); }
+.live-bilan li span:first-child { color: var(--gris-500); }
+.live-bilan li span:last-child { font-weight: 600; text-align: right; }
+.live-bilan li.ok span:last-child { color: var(--vert); }
+.live-bilan li.alerte span:last-child { color: var(--rouge); }
+.live-bilan li.attention span:last-child { color: var(--violet); }
+.live-precisions-label { font-size: 0.75rem; }
+.btn-remplacer { margin-left: 6px; font-size: 0.7rem; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--violet); background: #fff; color: var(--violet); cursor: pointer; }
+.champ-ligne.conserve .champ-etat { color: var(--violet); }
+.champ-ligne.introuvable .champ-etat { color: var(--rouge); }
+.photo-groupe { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+.photo-groupe select { font-size: 0.7rem; max-width: 70px; }

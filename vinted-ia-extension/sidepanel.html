@@ -58,16 +58,22 @@
         </div>
         <div id="live-photos" class="live-photos"></div>
         <ol id="live-etapes" class="live-etapes" hidden>
-          <li data-etape="photos">Photos détectées</li>
-          <li data-etape="retouches">Retouches</li>
-          <li data-etape="generation">Génération</li>
+          <li data-etape="photos">Détectées</li>
+          <li data-etape="pretes">Prêtes</li>
+          <li data-etape="analyse">Analyse</li>
+          <li data-etape="annonce">Annonce</li>
           <li data-etape="remplissage">Remplissage</li>
         </ol>
         <p id="live-message" class="live-message">Ouvre « Vendre un article » sur Vinted et ajoute une photo : elle apparaît ici automatiquement.</p>
+        <ul id="live-bilan" class="live-bilan"></ul>
         <div id="live-champs" class="live-champs"></div>
+        <label for="live-precisions" class="live-precisions-label">Précisions pour l'IA (facultatif)</label>
+        <input type="text" id="live-precisions" maxlength="300" placeholder="Taille, défauts, marque lisible…">
+        <p id="live-precisions-info" class="aide" hidden></p>
         <div class="ligne">
           <button type="button" id="live-generer" class="btn principal" hidden>Générer l'annonce</button>
           <button type="button" id="live-remplir" class="btn secondaire" hidden>Remplir le formulaire</button>
+          <button type="button" id="live-annuler" class="btn secondaire" hidden>Interrompre</button>
         </div>
       </div>
 
@@ -218,8 +224,8 @@
           <label class="mode-option">
             <input type="radio" name="mode-creation" value="groupes">
             <div class="mode-content">
-              <strong>Groupes automatiques</strong>
-              <span>Regroupement intelligent des photos</span>
+              <strong>Je compose les groupes</strong>
+              <span>Je choisis l'article de chaque photo</span>
             </div>
           </label>
         </div>
@@ -312,6 +318,10 @@
             <button type="button" id="deconnecter" class="btn secondaire">Déconnexion</button>
           </div>
         </div>
+        <div class="ligne">
+          <button type="button" id="diagnostic-serveur" class="btn secondaire">Diagnostic du serveur</button>
+        </div>
+        <p id="diagnostic-resultat" class="aide" hidden></p>
       </div>
 
       <div class="card">
@@ -327,6 +337,8 @@
           <input type="checkbox" id="autoRemplir" checked>
           Remplir automatiquement le formulaire après génération
         </label>
+        <label for="delaiStabilisation">Délai avant l'analyse après la dernière photo (secondes)</label>
+        <input type="number" id="delaiStabilisation" min="3" max="60" value="6">
         <label for="limiteAuto">Analyses automatiques maximum par jour</label>
         <input type="number" id="limiteAuto" min="1" max="100" value="10">
         <p class="aide">Une seule analyse par ensemble de photos. Chaque analyse consomme des crédits. Rien n'est jamais publié automatiquement.</p>

@@ -28,10 +28,11 @@ try {
   /* navigateur plus ancien : comportement par défaut */
 }
 
-async function appelerApi(apiKey, corps, version) {
+async function appelerApi(apiKey, corps, version, signal) {
   let reponse;
   try {
     reponse = await fetch(API_URL, {
+      signal: signal,
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -42,6 +43,7 @@ async function appelerApi(apiKey, corps, version) {
       body: JSON.stringify(corps)
     });
   } catch (e) {
+    if (e && e.name === 'AbortError') throw erreurInterrompue();
     throw new Error('Connexion impossible au service IA. Vérifie ta connexion internet.');
   }
 
@@ -63,10 +65,64 @@ async function appelerApi(apiKey, corps, version) {
   return json;
 }
 
-async function generer(images, precisions) {
+// Analyses interruptibles : une analyse annulée coupe la requête en cours.
+// Le serveur a pu la recevoir avant : le crédit est alors constaté par le panneau (avant/après).
+const analysesEnCours = new Map();
+
+function erreurInterrompue() {
+  const err = new Error('Analyse interrompue.');
+  err.code = 'ABORTED';
+  return err;
+}
+
+async function genererInterruptible(requestId, images, precisions) {
+  const controle = new AbortController();
+  if (requestId) analysesEnCours.set(requestId, controle);
+  try {
+    return await generer(images, precisions, controle.signal);
+  } catch (e) {
+    if (controle.signal.aborted || (e && e.name === 'AbortError')) throw erreurInterrompue();
+    throw e;
+  } finally {
+    if (requestId) analysesEnCours.delete(requestId);
+  }
+}
+
+function annulerAnalyse(requestId) {
+  const controle = analysesEnCours.get(requestId);
+  if (!controle) return false;
+  controle.abort();
+  return true;
+}
+
+// Diagnostic sans identifiants, sans IA, sans crédit : santé publique + état d'ouverture du service.
+async function pingServeur() {
+  const reglages = await lireReglages();
+  const base = reglages.backendUrl || IA.API_OFFICIELLE;
+  const res = { url: base, joignable: false, ferme: null, openaiConfigure: null };
+  try {
+    const sante = await fetch(IA.urlApi(base, '/api/v1/health'), {
+      credentials: 'omit', redirect: 'error', headers: { accept: 'application/json' }
+    });
+    const json = await lireJson(sante);
+    res.joignable = sante.ok;
+    res.openaiConfigure = json && typeof json.openai_configured === 'boolean' ? json.openai_configured : null;
+    // Une connexion vide est refusée par le middleware (403) quand le service est fermé, 422 quand il est ouvert.
+    const sonde = await fetch(IA.urlApi(base, '/api/v1/auth/login'), {
+      method: 'POST', credentials: 'omit', redirect: 'error',
+      headers: { 'content-type': 'application/json', accept: 'application/json' }, body: '{}'
+    });
+    res.ferme = sonde.status === 403 ? true : (sonde.status === 422 ? false : null);
+  } catch (e) {
+    res.joignable = false;
+  }
+  return res;
+}
+
+async function generer(images, precisions, signal) {
   const reglages = await lireReglages();
   if (IA.choisirMoteur(reglages) === 'backend') {
-    return analyserViaBackend(reglages, images, precisions);
+    return analyserViaBackend(reglages, images, precisions, signal);
   }
   const { apiKey, model, signature } = reglages;
   if (!apiKey) {
@@ -112,7 +168,7 @@ async function generer(images, precisions) {
   };
   if (appel.thinking) corps.thinking = appel.thinking;
 
-  const json = await appelerApi(apiKey, corps, appel.anthropicVersion);
+  const json = await appelerApi(apiKey, corps, appel.anthropicVersion, signal);
   const bloc = (json.content || []).find((b) => b.type === 'tool_use' && b.name === 'annonce');
   if (!bloc || !bloc.input || typeof bloc.input !== 'object') {
     if (json.stop_reason === 'max_tokens') throw new Error('La réponse de l\'IA a été coupée. Réessaie.');
@@ -138,7 +194,7 @@ function messageServeur(reponse, json) {
   return 'Le serveur n\'a pas pu rédiger l\'annonce (' + reponse.status + ').';
 }
 
-async function analyserViaBackend(reglages, images, precisions) {
+async function analyserViaBackend(reglages, images, precisions, signal) {
   const photos = IA.assainirImages(images);
   const url = IA.urlApi(reglages.backendUrl, '/api/v1/listings/analyze');
   let reponse;
@@ -147,6 +203,7 @@ async function analyserViaBackend(reglages, images, precisions) {
       method: 'POST',
       credentials: 'omit',
       redirect: 'error',
+      signal: signal,
       headers: {
         'content-type': 'application/json',
         accept: 'application/json',
@@ -155,6 +212,7 @@ async function analyserViaBackend(reglages, images, precisions) {
       body: JSON.stringify(IA.corpsAnalyse(photos, precisions, reglages))
     });
   } catch (e) {
+    if (e && e.name === 'AbortError') throw erreurInterrompue();
     const err = new Error('Connexion impossible au serveur. Vérifie qu\'il est démarré.');
     err.code = 'NETWORK';
     throw err;
@@ -302,7 +360,15 @@ chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
     return true;
   };
 
-  if (msg.type === 'generate') return traiter(generer(msg.images, msg.precisions));
+  if (msg.type === 'generate') {
+    const id = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : '';
+    return traiter(genererInterruptible(id, msg.images, msg.precisions));
+  }
+  if (msg.type === 'cancelGenerate') {
+    const id = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : '';
+    return traiter(Promise.resolve(annulerAnalyse(id)));
+  }
+  if (msg.type === 'pingServeur') return traiter(pingServeur());
   if (msg.type === 'fetchImage') return traiter(recupererImage(msg.url));
   if (msg.type === 'getPrefs') return traiter(lirePreferences());
   if (msg.type === 'testKey') return traiter(testerCle(msg.apiKey, msg.model));

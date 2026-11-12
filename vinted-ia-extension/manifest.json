@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Annonce Futée",
-  "version": "1.5.4",
+  "version": "1.5.5",
   "description": "Prépare les photos et l'annonce Vinted. Tu vérifies, tu remplis le formulaire, et tu publies toi-même.",
   "permissions": ["storage", "sidePanel"],
   "side_panel": {

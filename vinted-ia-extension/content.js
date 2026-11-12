@@ -27,57 +27,50 @@
     return !!el.closest('header, nav, footer, #annonce-futee-declencheur');
   }
 
-  function trouverPhotosVinted() {
-    if (!estPageVente()) return [];
-    
-    // Zone du formulaire de vente
-    const zone = document.querySelector('main') || document.body;
-    
-    // Chercher les images dans la zone d'upload de photos
-    // Vinted utilise des conteneurs spécifiques pour les photos uploadées
-    const conteneurs = [
-      // Sélecteurs pour les photos uploadées sur Vinted
-      '[data-testid*="photo"]',
-      '[class*="photo-upload"]',
-      '[class*="image-upload"]',
-      '[class*="dropzone"]',
-      '[class*="ItemPhoto"]',
-      'form [class*="photo"]'
-    ];
+  const SELECTEUR_PROGRESSION = 'progress, [role="progressbar"], [aria-busy="true"]';
 
-    const imgs = [];
+  // Une photo est « prête » quand elle est entièrement décodée et sans indicateur de progression autour.
+  function enChargement(img) {
+    if (!img.complete || !img.naturalWidth) return true;
+    let parent = img.parentElement;
+    for (let i = 0; i < 3 && parent; i++, parent = parent.parentElement) {
+      // On s'arrête au conteneur d'une seule photo : l'indicateur d'une photo voisine ne la concerne pas.
+      if (parent.querySelectorAll('img').length > 1) break;
+      if (parent.matches && parent.matches('[aria-busy="true"]')) return true;
+      if (parent.querySelector && parent.querySelector(SELECTEUR_PROGRESSION)) return true;
+    }
+    return false;
+  }
+
+  // Retourne les photos prêtes (sources) et le nombre de photos encore en cours de chargement.
+  function analyserPhotos() {
+    const resultat = { sources: [], enChargement: 0 };
+    if (!estPageVente()) return resultat;
+    const zone = document.querySelector('main') || document.body;
     const vus = new Set();
 
-    // D'abord chercher les images blob/data (photos locales uploadées)
-    zone.querySelectorAll('img').forEach((img) => {
-      if (!img.src || horsZone(img)) return;
-      if (vus.has(img.src)) return;
-      
-      // Photos locales (blob ou data URL)
-      if (/^(blob:|data:image\/)/.test(img.src)) {
-        const rect = img.getBoundingClientRect();
-        if (rect.width >= 50 && rect.height >= 50) {
-          vus.add(img.src);
-          imgs.push(img.src);
-        }
-      }
-    });
-
-    // Si pas de photos locales, chercher les images du CDN Vinted
-    if (imgs.length === 0) {
+    const examiner = (filtre, minimum) => {
       zone.querySelectorAll('img').forEach((img) => {
-        if (!img.src || horsZone(img) || vus.has(img.src)) return;
-        if (!IA.hoteImageAutorise(img.src)) return;
-        
+        if (!img.src || horsZone(img) || vus.has(img.src) || !filtre(img.src)) return;
         const rect = img.getBoundingClientRect();
-        if (rect.width >= 80 && rect.height >= 80) {
-          vus.add(img.src);
-          imgs.push(img.src);
-        }
+        if (rect.width < minimum || rect.height < minimum) return;
+        vus.add(img.src);
+        if (enChargement(img)) resultat.enChargement++;
+        else resultat.sources.push(img.src);
       });
-    }
+    };
 
-    return imgs.slice(0, MAX_PHOTOS);
+    // Photos locales ajoutées par l'utilisateur (blob / data), sinon photos du CDN Vinted (annonce modifiée)
+    examiner((src) => /^(blob:|data:image\/)/.test(src), 50);
+    if (resultat.sources.length === 0 && resultat.enChargement === 0) {
+      examiner((src) => IA.hoteImageAutorise(src), 80);
+    }
+    resultat.sources = resultat.sources.slice(0, MAX_PHOTOS);
+    return resultat;
+  }
+
+  function trouverPhotosVinted() {
+    return analyserPhotos().sources;
   }
 
   // Calculer un hash simple pour détecter les changements
@@ -111,13 +104,18 @@
     minuteurVerif = setTimeout(verifierPhotos, delai);
   }
 
-  function notifierChangementPhotos(photos, hash) {
+  let dernierChargement = 0;
+  let tentativesChargement = 0;
+
+  function notifierChangementPhotos(photos, hash, nbChargement) {
     dernieresPhotosHash = hash;
+    dernierChargement = nbChargement;
     dernierEnvoi = Date.now();
     majBouton(photos.length, analyseEnCours);
     envoyer({
       type: 'photosChanged',
       count: photos.length,
+      enChargement: nbChargement,
       hash: hash,
       pageUrl: location.href,
       timestamp: dernierEnvoi
@@ -184,12 +182,21 @@
     }
   }
 
-  // Ne notifie que si l'ensemble des photos a réellement changé (ajout, retrait, remplacement).
+  // Ne notifie que si l'ensemble des photos prêtes (ou leur chargement) a réellement changé.
+  // Tant que des photos se chargent, on revérifie sans bruit (borné) pour signaler la fin du chargement.
   function verifierPhotos() {
     if (!estPageVente()) return;
-    const photos = trouverPhotosVinted();
-    const hash = calculerHash(photos);
-    if (hash !== dernieresPhotosHash) notifierChangementPhotos(photos, hash);
+    const etat = analyserPhotos();
+    const hash = calculerHash(etat.sources);
+    if (etat.enChargement > 0 && tentativesChargement < 40) {
+      tentativesChargement++;
+      planifierVerification(700);
+    } else if (etat.enChargement === 0) {
+      tentativesChargement = 0;
+    }
+    if (hash !== dernieresPhotosHash || etat.enChargement !== dernierChargement) {
+      notifierChangementPhotos(etat.sources, hash, etat.enChargement);
+    }
   }
 
   // ---------- Conversion en base64 ----------
@@ -286,24 +293,49 @@
     return String(lue).trim() === String(voulue).trim();
   }
 
-  // États par champ : 'rempli' (relu et confirmé), 'echec', 'introuvable', 'absent' (rien à écrire).
-  async function remplir(annonce) {
-    const etats = { titre: 'absent', description: 'absent', prix: 'absent' };
+  // Valeurs écrites par l'extension : permettent de distinguer une saisie de l'utilisateur
+  // (jamais écrasée sans confirmation) d'une valeur qu'elle a elle-même posée.
+  const ecrits = {};
+
+  // États par champ : 'rempli' (relu et confirmé), 'deja' (déjà identique), 'conserve' (saisie existante
+  // différente, non écrasée), 'echec', 'introuvable', 'absent' (rien à écrire).
+  // options.forcer : champs que l'utilisateur a confirmé de remplacer. options.seulement : limite aux champs listés.
+  async function remplir(annonce, options) {
+    const forcer = (options && options.forcer) || [];
+    const seulement = (options && options.seulement) || null;
+    const etats = {};
     const valeurs = {
       titre: annonce.titre || '',
       description: annonce.description || '',
       prix: formaterPrix(annonce.prix_suggere || annonce.prix)
     };
     for (const cle of Object.keys(valeurs)) {
+      if (seulement && seulement.indexOf(cle) < 0) continue;
+      etats[cle] = 'absent';
       if (!valeurs[cle]) continue;
       etats[cle] = 'introuvable';
       try {
         const el = CHAMPS[cle]();
         if (!el || el.disabled || el.readOnly) continue;
+        const actuelle = String(el.value || '').trim();
+        if (actuelle) {
+          if (memeValeur(cle, actuelle, valeurs[cle])) {
+            etats[cle] = 'deja';
+            ecrits[cle] = actuelle;
+            continue;
+          }
+          const poseParExtension = ecrits[cle] !== undefined && memeValeur(cle, actuelle, ecrits[cle]);
+          if (!poseParExtension && forcer.indexOf(cle) < 0) {
+            etats[cle] = 'conserve';
+            continue;
+          }
+        }
         ecrire(el, valeurs[cle]);
         await pause(150);
         const relu = CHAMPS[cle]() || el;
-        etats[cle] = memeValeur(cle, relu.value, valeurs[cle]) ? 'rempli' : 'echec';
+        const ok = memeValeur(cle, relu.value, valeurs[cle]);
+        if (ok) ecrits[cle] = String(relu.value).trim();
+        etats[cle] = ok ? 'rempli' : 'echec';
       } catch (e) {
         etats[cle] = 'echec';
       }
@@ -318,11 +350,23 @@
     return r.width > 0 && r.height > 0;
   }
 
+  // Un bouton d'envoi du formulaire ou de publication n'est jamais cliqué par l'extension.
+  function estBoutonValidation(el) {
+    const bouton = el.closest && el.closest('button, input[type="submit"], [type="submit"], a, [role="button"]');
+    if (!bouton) return false;
+    if ((bouton.getAttribute('type') || '').toLowerCase() === 'submit') return true;
+    const texte = normaliser(bouton.textContent || bouton.value || '');
+    return /\b(publier|mettre en ligne|ajouter l'article|envoyer l'annonce)\b/.test(texte);
+  }
+
+  // Retourne false quand le clic est refusé (bouton de validation) : l'appelant ne doit alors rien annoncer.
   function cliquer(el) {
+    if (estBoutonValidation(el)) return false;
     for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
       el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
     }
     el.click();
+    return true;
   }
 
   const MENUS = IA.MENUS;
@@ -355,7 +399,10 @@
     if (!cibles.length) return 'a_choisir';
     const menu = trouverMenu(def);
     if (!menu) return 'a_choisir';
-    if (menu.value && String(menu.value).trim()) return 'deja';
+    if (menu.value && String(menu.value).trim()) {
+      const actuelle = normaliser(String(menu.value));
+      return cibles.some((c) => actuelle.indexOf(c) >= 0) ? 'deja' : 'conserve';
+    }
 
     const tous = () => Array.from(document.querySelectorAll('body *'));
     const avant = new WeakSet(tous());
@@ -372,7 +419,7 @@
         option = tous().find((el) => nouveau(el) && el.children.length === 0 && normaliser(el.textContent) === cible) || null;
       }
       if (!option) continue;
-      cliquer(option);
+      if (!cliquer(option)) continue;
       choisis++;
       await pause(200);
     }
@@ -529,20 +576,30 @@
           repondre({ ok: false, error: 'Ouvre la page Vinted « Vendre un article ».' });
           return;
         }
-        const fait = await remplir(data);
-        const menus = await remplirMenus(data);
-        repondre({ ok: true, fait: fait, menus: menus });
+        const seulement = Array.isArray(msg.seulement) ? msg.seulement : null;
+        const forcer = Array.isArray(msg.forcer) ? msg.forcer : [];
+        let bloquees = 0;
+        const bloquer = (e) => { e.preventDefault(); e.stopImmediatePropagation(); bloquees++; };
+        window.addEventListener('submit', bloquer, true);
+        try {
+          const fait = await remplir(data, { forcer: forcer, seulement: seulement });
+          const menus = seulement ? {} : await remplirMenus(data);
+          repondre({ ok: true, fait: fait, menus: menus, soumissionsBloquees: bloquees });
+        } finally {
+          window.removeEventListener('submit', bloquer, true);
+        }
       })();
       return true;
     }
 
     if (msg.type === 'getPageInfo') {
-      const photos = trouverPhotosVinted();
+      const etat = analyserPhotos();
       repondre({
         ok: true,
         estPageVente: estPageVente(),
-        photos: photos.length,
-        hash: calculerHash(photos),
+        photos: etat.sources.length,
+        enChargement: etat.enChargement,
+        hash: calculerHash(etat.sources),
         url: location.href
       });
       return true;
@@ -574,6 +631,8 @@
     if (cheminActuel !== dernierChemin) {
       dernierChemin = cheminActuel;
       dernieresPhotosHash = '';
+      dernierChargement = 0;
+      tentativesChargement = 0;
 
       if (estPageVente()) {
         if (!hote) creerInterface();
