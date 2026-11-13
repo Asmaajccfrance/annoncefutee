@@ -55,11 +55,21 @@ noter('Route protégée sans jeton refusée', sansJeton.statut === 401 || sansJe
 const echec = resultats.includes(false);
 if (echec) { console.log('\nSTOP : contrôles préalables en échec, aucune connexion tentée.'); process.exit(1); }
 
-const mdp = await saisieMasquee('Mot de passe du compte ' + EMAIL + ' (masqué) : ');
+// Saisie masquée ; à défaut de terminal interactif, variable d'environnement AF_MOT_DE_PASSE (jamais affichée).
+const mdp = (process.env.AF_MOT_DE_PASSE || (process.stdin.isTTY ? await saisieMasquee('Mot de passe du compte ' + EMAIL + ' (masqué) : ') : '')).replace(/[\r\n]+$/, '');
 const login = await appeler('/api/v1/auth/login', { methode: 'POST', corps: { email: EMAIL, password: mdp, device_name: 'verif' } });
 const jeton = login.json && (login.json.token || (login.json.data && login.json.data.token));
 noter('Connexion du compte de test', login.statut === 200 && !!jeton, 'HTTP ' + login.statut);
-if (!jeton) { console.log('STOP : connexion impossible.'); process.exit(1); }
+if (!jeton) {
+  if (login.statut === 422) {
+    const champs = login.json && login.json.errors ? Object.keys(login.json.errors) : [];
+    console.log('Diagnostic 422 : champ(s) en cause = ' + (champs.join(', ') || 'inconnu') + ' ; longueur saisie = ' + mdp.length + ' caractère(s).');
+    if (mdp.length === 0) console.log('→ Mot de passe vide : la saisie masquée n\'a rien capturé (relancer dans un terminal interactif, ou utiliser AF_MOT_DE_PASSE).');
+    else if (champs.includes('email')) console.log('→ Identifiants incorrects : le mot de passe saisi ne correspond pas à celui du compte.');
+  }
+  console.log('STOP : connexion impossible.');
+  process.exit(1);
+}
 
 const me = await appeler('/api/v1/me', { jeton });
 const credits = me.json && (me.json.credits || (me.json.data && me.json.data.credits));
