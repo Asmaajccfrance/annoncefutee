@@ -3,9 +3,17 @@
 return [
 
     // Quota du plan gratuit. Les futurs plans payants liront la table plans.
-    'monthly_credits' => (int) env('CREDITS_MONTHLY', 30),
+    'monthly_credits' => (int) env('CREDITS_MONTHLY', 50),
 
     'analysis_cost' => (int) env('CREDITS_ANALYSIS_COST', 1),
+
+    // Une photo IA (studio ou mannequin) coûte bien plus cher au fournisseur qu'une analyse de texte.
+    'photo_cost' => (int) env('CREDITS_PHOTO_COST', 5),
+
+    'photos_per_minute' => (int) env('PHOTO_MAX_PER_MINUTE', 4),
+
+    // Montant réservé pendant la génération d'une image, remplacé ensuite par le coût estimé.
+    'photo_hold_micros' => (int) env('PHOTO_RESERVATION_HOLD_MICROS', 100000),
 
     'per_minute' => (int) env('LISTING_MAX_PER_MINUTE', 6),
 

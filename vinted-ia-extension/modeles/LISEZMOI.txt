@@ -1,0 +1,2 @@
+silueta.onnx : modèle U2-Net compact de détourage d objet principal.
+Source : https://github.com/xuebinqin/U-2-Net (licence Apache 2.0), fichier ONNX distribué par https://github.com/danielgatis/rembg

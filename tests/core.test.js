@@ -34,8 +34,14 @@ test('les accents des menus sont ignorés', () => {
   assert.equal(IA.MENUS.etat.motif.test(IA.normaliser("État de l'article")), true);
   assert.equal(IA.MENUS.couleurs.motif.test(IA.normaliser('Couleurs (2)')), true);
   assert.equal(IA.MENUS.taille.motif.test(IA.normaliser('Taille')), true);
+  assert.equal(IA.MENUS.taille.motif.test(IA.normaliser('Pointure')), true);
   assert.equal(IA.MENUS.matiere.motif.test(IA.normaliser('Matière')), true);
   assert.equal(IA.MENUS.etat.motif.test(IA.normaliser('Marque')), false);
+  assert.equal(IA.MENUS.categorie.motif.test(IA.normaliser('Catégorie')), true);
+  assert.equal(IA.MENUS.categorie.motif.test(IA.normaliser('Marque')), false);
+  assert.equal(IA.MENUS.marque.motif.test(IA.normaliser('Marque')), true);
+  assert.equal(IA.MENUS.marque.motif.test(IA.normaliser('Marque (2)')), true);
+  assert.equal(IA.MENUS.marque.motif.test(IA.normaliser('Catégorie')), false);
 });
 
 test('les libellés du formulaire de démonstration sont reconnus', () => {
@@ -117,6 +123,19 @@ test('les réglages restent dans les bornes connues', () => {
   assert.equal(s.signature.length, 300);
   assert.equal(s.autoGenerer, true);
   assert.equal(IA.assainirReglages({}).hashtags, true);
+  assert.equal(IA.REGLAGES_DEFAUT.signature, '⚡ Envoi soigné et rapide.');
+  assert.equal(IA.REGLAGES_DEFAUT.autoGenerer, true);
+});
+
+test('la formule d\'expédition est ajoutée telle quelle, avant les hashtags', () => {
+  const formule = '⚡ Envoi soigné et rapide.';
+  const avec = IA.poserExpedition('Pull bleu.\n\nÉtat : bon.\n\n#pull #bleu', formule);
+  assert.equal(avec, 'Pull bleu.\n\nÉtat : bon.\n\n⚡ Envoi soigné et rapide.\n#pull #bleu');
+  assert.equal(IA.poserExpedition(avec, formule), avec, 'pas de doublon');
+  assert.equal(
+    IA.poserExpedition('Pull.\n\nEnvoi soigné et rapide.', formule),
+    'Pull.\n\n⚡ Envoi soigné et rapide.'
+  );
 });
 
 test('Haiku garde l’appel forcé, Sonnet et Opus passent en outil strict', () => {

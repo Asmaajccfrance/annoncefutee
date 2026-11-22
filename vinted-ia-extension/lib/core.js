@@ -28,15 +28,17 @@
     'Moutarde', 'Menthe'
   ];
 
+  const FORMULE_EXPEDITION = '⚡ Envoi soigné et rapide.';
+
   const REGLAGES_DEFAUT = {
     apiKey: '',
     model: MODELE_DEFAUT,
-    signature: '',
+    signature: FORMULE_EXPEDITION,
     style: 'normal',
     hashtags: true,
     prixAjustement: 0,
     prixArrondi: 1,
-    autoGenerer: false,
+    autoGenerer: true,
     backendUrl: API_OFFICIELLE,
     backendToken: '',
     backendEmail: ''
@@ -75,12 +77,41 @@
       motif: /^couleurs?( \(.*\))?$/
     },
     taille: {
-      selecteurs: ['[data-testid="size-select-dropdown-input"]', 'input[name="size"]', 'input#size_id'],
-      motif: /^tailles?( \(.*\))?$/
+      selecteurs: [
+        '[data-testid="size-select-dropdown-input"]',
+        '[data-testid="size-select-dropdown-chevron"]',
+        'input[name="size"]',
+        'input#size_id'
+      ],
+      motif: /^(tailles?|pointures?)( \(.*\))?$/,
+      recherche: true,
+      jeton: true,
+      attendre: true
     },
     matiere: {
       selecteurs: ['[data-testid="material-select-dropdown-input"]', 'input[name="material"]', 'input#material'],
       motif: /^matieres?( \(.*\))?$/
+    },
+    categorie: {
+      selecteurs: [
+        '[data-testid="catalog-select-dropdown-input"]',
+        '[data-testid="catalog-select-dropdown-chevron"]',
+        '[data-testid="category-select-dropdown-input"]',
+        'input[name="catalog_id"]',
+        'input#catalog_id'
+      ],
+      motif: /^categorie( \(.*\))?$/
+    },
+    marque: {
+      selecteurs: [
+        '[data-testid="brand-select-dropdown-input"]',
+        '[data-testid="brand-select-dropdown-chevron"]',
+        'input[name="brand"]',
+        'input#brand_id'
+      ],
+      motif: /^marque( \(.*\))?$/,
+      recherche: true,
+      conserverSiRempli: true
     }
   };
 
@@ -278,7 +309,23 @@
     const annonce = assainirAnnonce(data);
     annonce.prix_ia = annonce.prix_suggere;
     annonce.prix_suggere = appliquerReglePrix(annonce.prix_suggere, reglages || {});
+    annonce.description = poserExpedition(annonce.description, (reglages || {}).signature || FORMULE_EXPEDITION);
     return annonce;
+  }
+
+  // La formule est posée ici, pas seulement demandée à l'IA : le texte exact et l'icône restent.
+  function poserExpedition(description, signature) {
+    const formule = chaine(typeof signature === 'string' ? signature : '', 300);
+    if (!formule) return description;
+    if (description.indexOf(formule) >= 0) return description;
+    const sansIcone = formule.replace(/^\S+\s+/, '');
+    if (sansIcone && sansIcone !== formule && description.indexOf(sansIcone) >= 0) {
+      return description.replace(sansIcone, formule);
+    }
+    const lignes = description.split('\n');
+    const hashtag = lignes.findIndex((ligne) => /^\s*#/.test(ligne));
+    lignes.splice(hashtag < 0 ? lignes.length : hashtag, 0, formule);
+    return lignes.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
   // Haiku 5.5 accepte un outil forcé : la réponse commence par l'outil, sans réflexion.
@@ -423,7 +470,9 @@
     choisirMoteur: choisirMoteur,
     urlApi: urlApi,
     corpsAnalyse: corpsAnalyse,
+    FORMULE_EXPEDITION: FORMULE_EXPEDITION,
     preparerAnnonceServeur: preparerAnnonceServeur,
+    poserExpedition: poserExpedition,
     optionsAppel: optionsAppel,
     construireOutil: construireOutil,
     autoriserMessage: autoriserMessage

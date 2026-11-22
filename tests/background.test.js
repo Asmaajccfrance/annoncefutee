@@ -23,7 +23,7 @@ function creerService(fetchFaux, stockage) {
     fetch: fetchFaux,
     importScripts: (f) => vm.runInContext(lire(f), contexte),
     chrome: {
-      runtime: { id: EXT, lastError: undefined, onMessage: { addListener: (f) => ecouteurs.push(f) }, onInstalled: { addListener() {} }, sendMessage: () => Promise.resolve() },
+      runtime: { id: EXT, lastError: undefined, onMessage: { addListener: (f) => ecouteurs.push(f) }, onConnect: { addListener() {} }, onInstalled: { addListener() {} }, sendMessage: () => Promise.resolve() },
       storage: {
         local: {
           get: (defauts, cb) => {

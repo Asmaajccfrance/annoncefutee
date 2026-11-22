@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "Annonce Futée",
+  "version": "1.0.0",
+  "description": "Autocomplète le titre, la description et le prix de ton annonce Vinted sur Firefox Android et PC. Tu vérifies et tu publies toi-même.",
+  "icons": {
+    "48": "images/icon-48.png",
+    "96": "images/icon-96.png",
+    "128": "images/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "extension@annoncefutee.fr",
+      "strict_min_version": "113.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "113.0"
+    }
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_title": "Annonce Futée",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "images/icon-48.png",
+      "96": "images/icon-96.png",
+      "128": "images/icon-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.vinted.fr/*",
+        "https://vinted.fr/*"
+      ],
+      "js": ["capture.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.vinted.fr/*",
+        "https://vinted.fr/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://www.vinted.fr/*",
+    "https://vinted.fr/*",
+    "https://*.vinted.net/*",
+    "https://annoncefutee.fr/*"
+  ]
+}

@@ -12,7 +12,7 @@ use Tests\TestCase;
 
 /**
  * Compte de test interne : accès service fermé et absence de quota, uniquement pour lui,
- * avec double verrou (liste du serveur + drapeau en base). Plafonds financiers conservés.
+ * avec double verrou (liste du serveur + drapeau en base). Le plafond du jour ne le concerne pas.
  */
 class TestAccountTest extends TestCase
 {
@@ -145,9 +145,23 @@ class TestAccountTest extends TestCase
         Http::assertSentCount(1);
     }
 
-    public function test_financial_ceilings_still_apply_to_the_test_account(): void
+    public function test_the_personal_daily_ceiling_does_not_stop_the_test_account(): void
     {
         config(['credits.daily_user_cost_usd' => 0.000001]);
+        $user = $this->testAccount();
+        UsageEvent::query()->create([
+            'user_id' => $user->id, 'operation' => 'listing.analyze', 'status' => 'succeeded',
+            'credits_charged' => 1, 'estimated_cost_micros' => 5,
+        ]);
+        Http::fake(['https://api.openai.com/*' => Http::response($this->openaiBody(), 200)]);
+
+        $this->withToken($this->tokenOf($user))->postJson('/api/v1/listings/analyze', ['images' => [Jpeg::make()]])
+            ->assertOk();
+    }
+
+    public function test_the_global_daily_ceiling_still_stops_the_test_account(): void
+    {
+        config(['credits.daily_global_cost_usd' => 0.000001]);
         $user = $this->testAccount();
         UsageEvent::query()->create([
             'user_id' => $user->id, 'operation' => 'listing.analyze', 'status' => 'succeeded',
@@ -235,6 +249,18 @@ class TestAccountTest extends TestCase
         $user->forceFill(['internal_test_account' => true])->save();
 
         return $user;
+    }
+
+    public function test_the_internal_test_account_cannot_be_deleted_via_api(): void
+    {
+        $user = $this->testAccount();
+        $token = $this->tokenOf($user);
+
+        $this->withToken($token)->deleteJson('/api/v1/me', [
+            'password' => 'secret-test-1',
+        ])->assertForbidden()->assertJsonPath('code', 'test_account_protected');
+
+        $this->assertDatabaseHas('users', ['id' => $user->id]);
     }
 
     private function tokenOf(User $user): string

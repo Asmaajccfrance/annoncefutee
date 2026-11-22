@@ -1,0 +1,40 @@
+name: annonce_futee
+description: "Annonce Futée, application mobile."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_secure_storage: ^9.2.4
+  gal: ^2.3.1
+  http: ^1.5.0
+  image: ^4.5.4
+  image_picker: ^1.2.0
+  material_ui: ^1.11.0
+  path_provider: ^2.1.5
+  url_launcher: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/marque/icone.png
+    - assets/marque/logo.jpg
+  fonts:
+    - family: Bricolage Grotesque
+      fonts:
+        - asset: assets/fonts/BricolageGrotesque-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/BricolageGrotesque-Bold.ttf
+          weight: 700

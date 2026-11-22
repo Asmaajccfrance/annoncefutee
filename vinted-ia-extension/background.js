@@ -219,6 +219,7 @@ async function generer(images, precisions, signal) {
   const annonce = IA.assainirAnnonce(bloc.input);
   annonce.prix_ia = annonce.prix_suggere;
   annonce.prix_suggere = IA.appliquerReglePrix(annonce.prix_suggere, reglages);
+  annonce.description = IA.poserExpedition(annonce.description, signature || IA.FORMULE_EXPEDITION);
   return annonce;
 }
 
@@ -394,6 +395,11 @@ async function recupererImage(url) {
 // Stocke le dernier état des photos pour le sidepanel
 let dernierEtatPhotos = { count: 0, hash: '', tabId: null, timestamp: 0 };
 
+chrome.runtime.onConnect.addListener((port) => {
+  if (!port || port.name !== 'maintien') return;
+  port.onMessage.addListener(() => {});
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
   if (!msg || !msg.type) return false;
   if (!IA.autoriserMessage(msg.type, sender, chrome.runtime.id)) return false;
@@ -431,8 +437,17 @@ chrome.runtime.onMessage.addListener((msg, sender, repondre) => {
   }
   if (msg.type === 'openSidePanel') {
     const tabId = sender.tab && sender.tab.id;
-    const ouverture = tabId ? chrome.sidePanel.open({ tabId: tabId }) : chrome.sidePanel.open({});
-    return traiter(ouverture.then(() => true));
+    if (!tabId || !chrome.sidePanel) {
+      repondre({ ok: false, error: 'Panneau indisponible. Clique sur l\'icône Annonce Futée à côté de la barre d\'adresse.' });
+      return false;
+    }
+    // Appelé tout de suite, dans le clic : Chrome refuse l'ouverture sinon.
+    chrome.sidePanel.setOptions({ tabId: tabId, path: 'sidepanel.html', enabled: true });
+    chrome.sidePanel.open({ tabId: tabId }).then(
+      () => repondre({ ok: true }),
+      (e) => repondre({ ok: false, error: (e && e.message) || 'Clique sur l\'icône Annonce Futée à côté de la barre d\'adresse.' })
+    );
+    return true;
   }
   
   // Notification de changement de photos depuis content.js

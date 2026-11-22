@@ -18,7 +18,16 @@ test('une photo ajoutée s\'affiche seule, une seule analyse, formulaire rempli,
   assert.match(p.champs(), /Titre\s*Rempli ✓/);
   assert.match(p.champs(), /Prix\s*Échec/, 'un champ non confirmé ne doit pas être annoncé comme rempli');
   assert.match(p.champs(), /Taille[^]*À choisir toi-même/);
-  assert.match(p.champs(), /Catégorie\s*À renseigner/);
+  assert.match(p.champs(), /Catégorie\s*À choisir toi-même/);
+  assert.match(p.champs(), /Marque\s*Rempli ✓/);
+  assert.match(p.champs(), /Estimation de l'IA, à vérifier/);
+  const lien = p.$('button.lien-similaires');
+  assert.ok(lien, 'le bouton des annonces similaires est sous le prix');
+  assert.strictEqual(lien.getAttribute('data-url'), 'https://www.vinted.fr/catalog?search_text=' + encodeURIComponent(ANNONCE.titre));
+  assert.strictEqual(p.$('#photoFond').checked, false);
+  assert.strictEqual(p.$('#photoOriginales').checked, true);
+  assert.strictEqual(p.$('#photoCouverture').checked, false);
+  assert.strictEqual(p.$('#photoRedresser').checked, true);
   assert.strictEqual(p.badge(), 'Prête');
 
   // transparence : chaque information demandée est affichée
@@ -167,12 +176,24 @@ test('sans consentement, le mode automatique ne lance rien', async () => {
   p.fermer();
 });
 
-test('mode manuel : photos affichées, génération et remplissage sur demande seulement', async () => {
+test('mode manuel : rien sans clic, puis un clic sur « Générer » génère et remplit le formulaire', async () => {
   const p = creerPanneau({ stockage: { autoGenerer: false } });
   assert.ok(await jusqua(() => p.nbPhotos() === 1));
   await attendre(3500);
   assert.strictEqual(p.serveur.appelsGenerer, 0, 'rien sans clic quand le mode automatique est désactivé');
+  assert.strictEqual(p.serveur.appelsRemplir.length, 0);
   assert.strictEqual(p.$('#live-generer').hidden, false);
+
+  p.$('#live-generer').click();
+  assert.ok(await jusqua(() => p.serveur.appelsGenerer === 1 && p.serveur.appelsRemplir.length === 1 && /rempli\(s\)/.test(p.messageLive())), p.messageLive());
+  assert.strictEqual(p.serveur.appelsRemplir.length, 1, 'un seul remplissage pour un clic');
+  assert.deepStrictEqual(erreursNonGerees, []);
+  p.fermer();
+});
+
+test('mode manuel, remplissage automatique décoché : le formulaire n\'est rempli que sur demande', async () => {
+  const p = creerPanneau({ stockage: { autoGenerer: false, autoRemplir: false } });
+  assert.ok(await jusqua(() => p.nbPhotos() === 1));
 
   p.$('#live-generer').click();
   assert.ok(await jusqua(() => p.serveur.appelsGenerer === 1 && !p.$('#live-remplir').hidden), p.messageLive());
@@ -315,4 +336,90 @@ test('diagnostic serveur : état réel affiché sans promettre que la chaîne fo
   assert.ok(await jusqua(() => /réservé au compte de test/.test(q.$('#diagnostic-resultat').textContent)));
   assert.match(q.$('#diagnostic-resultat').textContent, /ce n'est pas une panne/);
   q.fermer();
+});
+
+function fauxDetourage(w) {
+  w.createImageBitmap = async () => ({ close() {} });
+  w.AnnonceFuteeDetourage = {
+    disponible: () => false,
+    originale() { return { toDataURL: () => 'data:image/jpeg;base64,' + Buffer.from('ORIGINE').toString('base64') }; },
+    presenter: async () => ({ ok: true, canvas: { toDataURL: () => 'data:image/jpeg;base64,' + Buffer.from('BLANC').toString('base64') }, angle: 0 })
+  };
+}
+
+function deposer(p, fichiers) {
+  const ev = new p.w.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(ev, 'dataTransfer', { value: { files: fichiers } });
+  p.$('#depot').dispatchEvent(ev);
+}
+
+function imageFactice(p, nom) {
+  return new p.w.File([Uint8Array.from([1, 2, 3])], nom, { type: 'image/jpeg' });
+}
+
+async function reglagesPrets(p) {
+  assert.ok(await jusqua(() => (p.$('#signature').value || '').indexOf('Envoi') >= 0));
+}
+
+function nomsPhotos(msg) {
+  return msg.images.map((img) => Buffer.from(img.b64, 'base64').toString()).join('|');
+}
+
+test('le dépôt envoie l\'originale sans fond blanc, sauf si la case est cochée', async () => {
+  const p = creerPanneau({ avantPanneau: fauxDetourage });
+  await reglagesPrets(p);
+  deposer(p, [new p.w.File(['note'], 'note.txt', { type: 'text/plain' })]);
+  await attendre(200);
+  assert.strictEqual(p.serveur.appelsPhotos.length, 0, 'un fichier qui n\'est pas une image est ignoré');
+
+  deposer(p, [imageFactice(p, 'a.jpg')]);
+  assert.ok(await jusqua(() => p.serveur.appelsPhotos.length === 1));
+  assert.strictEqual(nomsPhotos(p.serveur.appelsPhotos[0]), 'ORIGINE');
+  p.fermer();
+
+  const q = creerPanneau({ avantPanneau: fauxDetourage });
+  await reglagesPrets(q);
+  q.$('#photoFond').checked = true;
+  q.$('#sauvegarder').click();
+  assert.ok(await jusqua(() => q.stockage.photoFond === true && q.stockage.photoFondChoisi === true));
+  deposer(q, [imageFactice(q, 'a.jpg')]);
+  assert.ok(await jusqua(() => q.serveur.appelsPhotos.length === 1));
+  assert.strictEqual(nomsPhotos(q.serveur.appelsPhotos[0]), 'ORIGINE|BLANC');
+  q.fermer();
+});
+
+test('la couverture et l\'absence d\'originales changent l\'ordre envoyé', async () => {
+  const p = creerPanneau({ avantPanneau: fauxDetourage });
+  await reglagesPrets(p);
+  p.$('#photoFond').checked = true;
+  p.$('#photoCouverture').checked = true;
+  p.$('#sauvegarder').click();
+  assert.ok(await jusqua(() => p.stockage.photoCouverture === true));
+  deposer(p, [imageFactice(p, 'a.jpg')]);
+  assert.ok(await jusqua(() => p.serveur.appelsPhotos.length === 1));
+  assert.strictEqual(nomsPhotos(p.serveur.appelsPhotos[0]), 'BLANC|ORIGINE');
+  p.fermer();
+
+  const q = creerPanneau({ avantPanneau: fauxDetourage });
+  await reglagesPrets(q);
+  q.$('#photoFond').checked = true;
+  q.$('#photoOriginales').checked = false;
+  q.$('#sauvegarder').click();
+  assert.ok(await jusqua(() => q.stockage.photoOriginales === false));
+  deposer(q, [imageFactice(q, 'a.jpg')]);
+  assert.ok(await jusqua(() => q.serveur.appelsPhotos.length === 1));
+  assert.strictEqual(nomsPhotos(q.serveur.appelsPhotos[0]), 'BLANC');
+  q.fermer();
+});
+
+test('si l\'ajout au formulaire échoue, l\'erreur est affichée et l\'enregistrement proposé', async () => {
+  const p = creerPanneau({
+    avantPanneau: fauxDetourage,
+    addPhotos: { ok: false, error: 'Le formulaire refuse les photos.' }
+  });
+  await reglagesPrets(p);
+  deposer(p, [imageFactice(p, 'a.jpg')]);
+  assert.ok(await jusqua(() => /Le formulaire refuse les photos/.test(p.$('#depot-message').textContent)));
+  assert.strictEqual(p.$('#depot-enregistrer').hidden, false);
+  p.fermer();
 });

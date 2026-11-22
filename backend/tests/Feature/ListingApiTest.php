@@ -398,4 +398,108 @@ class ListingApiTest extends TestCase
             ],
         ];
     }
+
+    public function test_update_password_checks_current_password_and_revokes_other_tokens(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'camille@example.com',
+            'password' => 'ancienPass1',
+            'plan_id' => Plan::free()->id,
+        ]);
+        $jetonActuel = $user->createToken('mobile')->plainTextToken;
+        $jetonAutre = $user->createToken('chrome')->plainTextToken;
+
+        $this->withToken($jetonActuel)->putJson('/api/v1/me/password', [
+            'current_password' => 'mauvaisPass1',
+            'password' => 'nouveauPass2',
+            'password_confirmation' => 'nouveauPass2',
+        ])->assertUnprocessable();
+
+        $this->withToken($jetonActuel)->putJson('/api/v1/me/password', [
+            'current_password' => 'ancienPass1',
+            'password' => 'court1',
+            'password_confirmation' => 'court1',
+        ])->assertUnprocessable();
+
+        $this->withToken($jetonActuel)->putJson('/api/v1/me/password', [
+            'current_password' => 'ancienPass1',
+            'password' => 'nouveauPass2',
+            'password_confirmation' => 'nouveauPass2',
+        ])->assertOk()->assertJsonPath('ok', true);
+
+        $this->assertSame(1, $user->tokens()->count());
+        $this->app['auth']->forgetGuards();
+        $this->withToken($jetonAutre)->getJson('/api/v1/me')->assertUnauthorized();
+        $this->app['auth']->forgetGuards();
+        $this->withToken($jetonActuel)->getJson('/api/v1/me')->assertOk();
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'camille@example.com',
+            'password' => 'ancienPass1',
+        ])->assertUnprocessable();
+
+        $this->postJson('/api/v1/auth/login', [
+            'email' => 'camille@example.com',
+            'password' => 'nouveauPass2',
+        ])->assertOk();
+    }
+
+    public function test_delete_account_removes_user_tokens_and_usage_events(): void
+    {
+        $user = User::factory()->create([
+            'email' => 'supprime@example.com',
+            'password' => 'secretPass1',
+            'plan_id' => Plan::free()->id,
+        ]);
+        UsageEvent::query()->create([
+            'user_id' => $user->id,
+            'operation' => 'listing.analyze',
+            'status' => 'succeeded',
+            'credits_charged' => 1,
+            'estimated_cost_micros' => 100,
+        ]);
+        $token = $user->createToken('mobile')->plainTextToken;
+
+        $this->withToken($token)->deleteJson('/api/v1/me', [
+            'password' => 'fauxSecret1',
+        ])->assertUnprocessable();
+
+        $this->withToken($token)->deleteJson('/api/v1/me', [
+            'password' => 'secretPass1',
+        ])->assertOk()->assertJsonPath('ok', true);
+
+        $this->assertDatabaseMissing('users', ['id' => $user->id]);
+        $this->assertDatabaseMissing('usage_events', ['user_id' => $user->id]);
+        $this->assertSame(0, \Laravel\Sanctum\PersonalAccessToken::query()->where('tokenable_id', $user->id)->count());
+    }
+
+    public function test_plans_endpoint_exposes_four_tiers_with_only_discovery_active(): void
+    {
+        $response = $this->getJson('/api/v1/plans')
+            ->assertOk()
+            ->assertJsonPath('registration_open', true)
+            ->assertJsonCount(4, 'plans');
+
+        $plans = $response->json('plans');
+        $this->assertSame([0, 7, 14, 39], array_column($plans, 'price_euros'));
+        $this->assertSame([true, false, false, false], array_column($plans, 'is_active'));
+
+        $this->postJson('/api/v1/auth/register', [
+            'name' => 'Camille',
+            'email' => 'camille@example.com',
+            'password' => 'motdepasse1',
+            'password_confirmation' => 'motdepasse1',
+            'plan' => 'vendeur',
+        ])->assertStatus(422)->assertJsonPath('code', 'plan_inactive');
+
+        $this->postJson('/api/v1/auth/register', [
+            'name' => 'Camille',
+            'email' => 'camille@example.com',
+            'password' => 'motdepasse1',
+            'password_confirmation' => 'motdepasse1',
+            'plan' => 'free',
+        ])->assertCreated()
+            ->assertJsonPath('user.plan_slug', 'free')
+            ->assertJsonPath('user.plan_name', 'Découverte');
+    }
 }

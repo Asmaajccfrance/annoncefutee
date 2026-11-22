@@ -6,6 +6,7 @@
     <meta name="robots" content="noindex, nofollow">
     <meta name="description" content="Annonce Futée prépare le titre, la description et le prix d'une annonce à partir de vos photos. Le service n'est pas encore ouvert.">
     <title>Annonce Futée — Préparation</title>
+    <link rel="icon" href="/icone-annonce-futee.png" type="image/png">
     <link rel="preconnect" href="https://fonts.bunny.net">
     <link href="https://fonts.bunny.net/css?family=fraunces:500,560i|outfit:400,500" rel="stylesheet">
     <style>
@@ -55,12 +56,11 @@
             flex-direction: column;
         }
 
-        .mark {
-            width: 2.5rem;
-            height: 0.25rem;
-            border-radius: 999px;
-            background: var(--pine);
-            margin-bottom: 32px;
+        .logo {
+            width: min(100%, 28rem);
+            height: auto;
+            display: block;
+            margin: 0 0 28px;
         }
 
         p.domain {
@@ -142,7 +142,7 @@
 </head>
 <body>
     <main>
-        <div class="mark" aria-hidden="true"></div>
+        <img class="logo" src="/logo-annonce-futee.jpg" alt="Annonce Futée">
         <p class="domain">annoncefutee.fr</p>
         <h1>Vos photos.<br><em>Une annonce prête à relire.</em></h1>
         <p class="lead">Annonce Futée prépare le titre, la description et le prix à partir des photos que vous avez déjà choisies. Vous vérifiez, puis vous publiez vous-même.</p>

@@ -46,7 +46,7 @@ return new class extends Migration
         DB::table('plans')->insert([
             'slug' => 'free',
             'name' => 'Gratuit',
-            'monthly_credits' => 30,
+            'monthly_credits' => 50,
             'analysis_cost' => 1,
             'stripe_price_id' => null,
             'is_active' => true,

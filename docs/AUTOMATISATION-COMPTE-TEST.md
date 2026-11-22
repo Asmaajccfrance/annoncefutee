@@ -11,7 +11,7 @@ Double verrou, contrôlé **côté serveur** à chaque requête :
 1. l'e-mail figure dans `TEST_ACCOUNT_EMAILS` (fichier `.env`, jamais dans le dépôt) ;
 2. le compte porte le drapeau `users.internal_test_account`, posé uniquement par la commande `php artisan account:test-admin` (le drapeau n'est pas remplissable depuis une requête, l'inscription ne peut pas le poser).
 
-Pour ce compte : pas de quota mensuel, pas de refus lié aux 30 crédits gratuits, historique et consommation réelle conservés, affichage « Crédits IA : Illimités — Compte test ».
+Pour ce compte : pas de quota mensuel, pas de refus lié aux 50 crédits gratuits, historique et consommation réelle conservés, affichage « Crédits IA : Illimités — Compte test ».
 
 **Illimité = pas de quota de crédits. Pas de dépenses illimitées.** Restent actifs pour ce compte : plafond de coût quotidien par utilisateur (`LISTING_DAILY_USER_COST_USD`, 1 $ par défaut) et global (`LISTING_DAILY_GLOBAL_COST_USD`, 25 $), une seule analyse simultanée (`LISTING_MAX_INFLIGHT`), limite par minute, protections contre les appels répétés. La clé OpenAI ne quitte jamais Laravel ; l'extension ne la voit jamais.
 

@@ -26,7 +26,7 @@
   const PAGE_VENTE = /^https:\/\/www\.vinted\.fr\/items\/(new|\d+\/edit)/;
   const COTE_MAX = 1024;
   const MAX_BROUILLONS_STOCKES = 200;
-  const DELAI_DEFAUT_S = 6;
+  const DELAI_DEFAUT_S = 2;
   const ERREURS_REFUS_SERVEUR = ['HTTP_401', 'HTTP_402', 'HTTP_403', 'HTTP_404', 'HTTP_422', 'HTTP_429', 'NO_KEY'];
   const CHAMPS_REMPLACABLES = ['titre', 'description', 'prix'];
 
@@ -48,7 +48,8 @@
   let brouillons = [];
   let reglages = {
     autoGenerer: false, autoRemplir: true, limiteAuto: 10, consentementIA: false, claudeExplicite: false,
-    delaiS: DELAI_DEFAUT_S
+    autoAmeliorer: false, delaiS: DELAI_DEFAUT_S,
+    photoFond: false, photoAuto: false, photoRedresser: true, photoOriginales: true, photoCouverture: false
   };
   let compte = { connected: false, email: '', credits: null };
 
@@ -76,7 +77,8 @@
       reessais: 0,             // nouveaux essais automatiques déjà faits pour cet ensemble de photos
       activite: null,          // { heure, texte } : dernier événement affiché
       annulation: null,        // { annule, envoye, requestId } pendant une analyse
-      ignoree: ''              // ensemble de photos pour lequel l'automatisme ne doit plus rien lancer
+      ignoree: '',             // ensemble de photos pour lequel l'automatisme ne doit plus rien lancer
+      depot: null              // { total, uniques } : photos ajoutées au formulaire depuis le panneau
     };
   }
 
@@ -88,6 +90,59 @@
   function livePour(tabId) {
     if (!lives.has(tabId)) lives.set(tabId, creerLive(tabId));
     return lives.get(tabId);
+  }
+
+  // Suivi des photos par onglet pour le fond blanc : déjà traitées, créées par l'extension, attendues.
+  const DELAI_APPARITION_MS = 8000;
+  const blancs = new Map();
+  function etatBlanc(tabId) {
+    if (!blancs.has(tabId)) {
+      blancs.set(tabId, { faites: new Set(), generees: new Set(), vues: [], resultats: [], doublons: [], plafond: 0, attente: 0, attenteConnues: 0, jusqua: 0, enCours: false, aRefaire: false });
+    }
+    return blancs.get(tabId);
+  }
+
+  // Deux photos recompressées par Vinted restent la même image si leurs signatures sont proches.
+  const SEUIL_MEME_PHOTO = 8;
+
+  async function signatureVisuelle(b64) {
+    try {
+      const image = await chargerImage('data:image/jpeg;base64,' + b64);
+      const c = document.createElement('canvas');
+      c.width = 8;
+      c.height = 8;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0, 8, 8);
+      const data = ctx.getImageData(0, 0, 8, 8).data;
+      const lum = [];
+      for (let i = 0; i < 64; i++) lum.push(data[i * 4] * 0.299 + data[i * 4 + 1] * 0.587 + data[i * 4 + 2] * 0.114);
+      const moyenne = lum.reduce((a, b) => a + b, 0) / 64;
+      let bits = '';
+      for (const v of lum) bits += v >= moyenne ? '1' : '0';
+      return bits;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function distanceSignature(a, b) {
+    if (!a || !b || a.length !== b.length) return 64;
+    let n = 0;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) n++;
+    return n;
+  }
+
+  function vueConnue(B, signature) {
+    return !!signature && B.vues.some((v) => distanceSignature(v, signature) <= SEUIL_MEME_PHOTO);
+  }
+
+  function memoriserVue(B, signature) {
+    if (!signature || vueConnue(B, signature)) return;
+    B.vues.push(signature);
+  }
+  function fondBlancEnAttente(L) {
+    const B = blancs.get(L.tabId);
+    return !!B && (B.enCours || ((B.attente > 0 || B.attenteConnues > 0) && Date.now() < B.jusqua));
   }
 
   let generationEnCours = false;
@@ -654,6 +709,33 @@
     return lignes;
   }
 
+  // Une zone n'est réécrite que si son contenu a changé : pas de clignotement des photos ni des listes
+  // pendant les rafraîchissements (deux par seconde pendant l'attente).
+  const dernierRendu = new WeakMap();
+  function poser(el, html) {
+    if (dernierRendu.get(el) === html) return;
+    dernierRendu.set(el, html);
+    el.innerHTML = html;
+  }
+
+  function etiquetteAnnonce(L, occupe) {
+    const b = L.brouillon;
+    if (!b) {
+      if (!occupe) return '';
+      return '<div class="etiquette attente" aria-hidden="true"><span class="trait t1"></span><span class="trait t2"></span>' +
+        '<span class="trait t3"></span><span class="trait t4"></span></div>';
+    }
+    const details = [b.marque, b.taille, b.etat, (b.couleurs || []).join(', '), b.matiere].filter(Boolean);
+    return '<article class="etiquette">' +
+      '<div class="etiquette-haut"><h3 class="etiquette-titre">' + escapeHtml(b.titre || 'Sans titre') + '</h3>' +
+      (b.prix ? '<span class="etiquette-prix">' + escapeHtml(String(b.prix)) + ' €</span>' : '') + '</div>' +
+      (details.length ? '<p class="etiquette-details">' + details.map(escapeHtml).join(', ') + '</p>' : '') +
+      (b.description ? '<p class="etiquette-desc">' + escapeHtml(b.description) + '</p>' : '') +
+      (b.aVerifier && b.aVerifier.length
+        ? '<ul class="etiquette-doutes">' + b.aVerifier.map((t) => '<li>' + escapeHtml(t) + '</li>').join('') + '</ul>' : '') +
+      '</article>';
+  }
+
   function rendreLive() {
     const L = live;
     const badge = $('#live-badge');
@@ -669,9 +751,9 @@
     badge.textContent = texte;
     badge.className = classe;
 
-    $('#live-photos').innerHTML = L.photos
+    poser($('#live-photos'), L.photos
       .map((p) => '<img src="data:image/jpeg;base64,' + p.b64 + '" alt="Photo du formulaire">')
-      .join('');
+      .join(''));
 
     $('#live-etapes').hidden = !Object.values(L.etapes).some(Boolean);
     $$('#live-etapes li').forEach((li) => { li.className = L.etapes[li.dataset.etape] || ''; });
@@ -680,18 +762,31 @@
     msgEl.textContent = L.message;
     msgEl.className = 'live-message' + (L.erreur ? ' erreur' : '');
 
-    $('#live-bilan').innerHTML = (nb || L.analyse !== 'aucune')
+    const htmlBilan = (nb || L.analyse !== 'aucune')
       ? lignesBilan(L).map((l) => '<li class="' + l[2] + '"><span>' + escapeHtml(l[0]) + '</span><span>' + escapeHtml(l[1]) + '</span></li>').join('')
       : '';
+    poser($('#live-bilan'), htmlBilan);
+    $('#live-details').hidden = !htmlBilan;
 
-    $('#live-champs').innerHTML = (L.champs || []).map((c) =>
-      '<div class="champ-ligne ' + c.etat + '"><span class="champ-nom">' + escapeHtml(c.nom) + '</span>' +
-      '<span class="champ-etat">' + escapeHtml(TEXTE_ETAT[c.etat] || c.etat) +
-      (c.valeur && (c.etat === 'manuel' || c.etat === 'echec' || c.etat === 'a_choisir') ? ' : ' + escapeHtml(c.valeur) : '') +
-      (c.etat === 'conserve' && CHAMPS_REMPLACABLES.indexOf(c.cle) >= 0
-        ? ' <button type="button" class="btn-remplacer" data-cle="' + c.cle + '">Remplacer</button>' : '') +
-      '</span></div>'
-    ).join('');
+    const enAnalyse = generationEnCours && !!L.annulation;
+    const htmlAnnonce = etiquetteAnnonce(L, enAnalyse);
+    poser($('#live-annonce'), htmlAnnonce);
+    $('#live-annonce').hidden = !htmlAnnonce;
+    $('#card-live').classList.toggle('occupe', enAnalyse);
+
+    const titreSimilaires = (L.brouillon && L.brouillon.titre) || '';
+    poser($('#live-champs'), (L.champs || []).map((c) => {
+      const ligne = '<div class="champ-ligne ' + c.etat + '"><span class="champ-nom">' + escapeHtml(c.nom) + '</span>' +
+        '<span class="champ-etat">' + escapeHtml(TEXTE_ETAT[c.etat] || c.etat) +
+        (c.valeur && (c.etat === 'manuel' || c.etat === 'echec' || c.etat === 'a_choisir') ? ' : ' + escapeHtml(c.valeur) : '') +
+        (c.cle === 'prix' && c.valeur ? ' <span class="estimation-ia">Estimation de l\'IA, à vérifier</span>' : '') +
+        (c.etat === 'conserve' && CHAMPS_REMPLACABLES.indexOf(c.cle) >= 0
+          ? ' <button type="button" class="btn-remplacer" data-cle="' + c.cle + '">Remplacer</button>' : '') +
+        '</span></div>';
+      if (c.cle !== 'prix' || !titreSimilaires) return ligne;
+      const url = 'https://www.vinted.fr/catalog?search_text=' + encodeURIComponent(titreSimilaires);
+      return ligne + '<button type="button" class="btn secondaire lien-similaires" data-url="' + escapeHtml(url) + '">Voir les annonces similaires</button>';
+    }).join(''));
 
     const champPrec = $('#live-precisions');
     if (document.activeElement !== champPrec) champPrec.value = L.precisions;
@@ -815,7 +910,6 @@
       const ok = await actualiserPhotos(L, tab.id, info);
       if (!ok) return;
     }
-
     if (chargement > 0) {
       annulerMinuteur(L);
       L.analyse = 'attente-chargement';
@@ -941,8 +1035,17 @@
     return rep;
   }
 
+  // Le compte est relu pendant l'attente des photos : au moment d'envoyer, la réponse est déjà là.
+  let compteAnticipe = null;
+  function anticiperCompte() {
+    if (compteAnticipe && Date.now() - compteAnticipe.at < 15000) return;
+    compteAnticipe = { at: Date.now(), promesse: actualiserCompte() };
+  }
+
   async function verifierCredits(nbAnalyses) {
-    const rep = await actualiserCompte();
+    const anticipe = compteAnticipe && Date.now() - compteAnticipe.at < 15000 ? compteAnticipe.promesse : null;
+    compteAnticipe = null;
+    const rep = anticipe ? await anticipe : await actualiserCompte();
     if (!rep.ok) return { erreur: MSG_RESEAU };
     if (!compte.connected) return { erreur: 'Session expirée. Reconnecte-toi dans Réglages.' };
     if (compte.ferme) return { erreur: MSG_FERME };
@@ -1010,7 +1113,7 @@
     }
     const c = (await lire(['autoCompteur'])).autoCompteur;
     const n = c && c.jour === aujourdhui() ? c.n : 0;
-    if (n >= reglages.limiteAuto) {
+    if (!creditsIllimites() && reglages.limiteAuto > 0 && n >= reglages.limiteAuto) {
       return 'Limite quotidienne atteinte (' + n + '/' + reglages.limiteAuto + '). Utilise « Générer l\'annonce » pour continuer à la main.';
     }
     return null;
@@ -1035,25 +1138,39 @@
     return nbApres - nbAvant;
   }
 
-  function imagesPourIA(L) {
+  async function imagesPourIA(L) {
     const parFp = new Map();
     for (const photo of photosAlbum()) {
       const origine = fpParPhoto.get(photo.id);
       if (origine && origine.tabId === L.tabId) parFp.set(origine.fp, photo);
     }
+    // Photos déposées dans le panneau : l'annonce contient l'origine et la version sur fond blanc.
+    // L'IA n'en reçoit qu'une de chaque, pas les doublons.
+    const plafond = L.depot && L.depot.total === L.photos.length ? Math.min(IA.MAX_PHOTOS, L.depot.uniques) : IA.MAX_PHOTOS;
+    const B = blancs.get(L.tabId);
     const images = [];
     for (const p of L.photos) {
-      if (images.length >= IA.MAX_PHOTOS) break;
+      if (images.length >= plafond) break;
+      if (B && B.generees.has(p.fp)) continue;
+      if (B && B.doublons && B.doublons.length) {
+        const signature = await signatureVisuelle(p.b64);
+        if (signature && B.doublons.some((v) => distanceSignature(v, signature) <= SEUIL_MEME_PHOTO)) continue;
+      }
       const photo = parFp.get(p.fp);
       images.push(photo ? urlPhoto(photo).split(',')[1] : p.b64);
     }
     return images;
   }
 
+  function etatSousCategorie(b, menus) {
+    if (!b.sousCategorie) return 'absent';
+    if (menus.categorie === 'rempli' || menus.categorie === 'deja') return menus.categorie;
+    return 'manuel';
+  }
+
   function construireChamps(b, rep) {
     const fait = rep.fait || {};
     const menus = rep.menus || {};
-    const manuel = (valeur) => (valeur ? 'manuel' : 'absent');
     const menu = (cle, valeur) => {
       if (Array.isArray(valeur) ? !valeur.length : !valeur) return 'absent';
       return menus[cle] || 'a_choisir';
@@ -1062,9 +1179,9 @@
       { cle: 'titre', nom: LIBELLES.titre, etat: fait.titre || 'absent', valeur: b.titre },
       { cle: 'description', nom: LIBELLES.description, etat: fait.description || 'absent', valeur: '' },
       { cle: 'prix', nom: LIBELLES.prix, etat: fait.prix || 'absent', valeur: b.prix ? b.prix + ' €' : '' },
-      { cle: 'categorie', nom: LIBELLES.categorie, etat: manuel(b.categorie), valeur: b.categorie },
-      { cle: 'sousCategorie', nom: LIBELLES.sousCategorie, etat: manuel(b.sousCategorie), valeur: b.sousCategorie },
-      { cle: 'marque', nom: LIBELLES.marque, etat: manuel(b.marque), valeur: b.marque },
+      { cle: 'categorie', nom: LIBELLES.categorie, etat: menu('categorie', b.categorie || b.sousCategorie), valeur: b.categorie || b.sousCategorie },
+      { cle: 'sousCategorie', nom: LIBELLES.sousCategorie, etat: etatSousCategorie(b, menus), valeur: b.sousCategorie },
+      { cle: 'marque', nom: LIBELLES.marque, etat: menus.marque || 'a_choisir', valeur: b.marque },
       { cle: 'taille', nom: LIBELLES.taille, etat: menu('taille', b.taille), valeur: b.taille },
       { cle: 'etat', nom: LIBELLES.etat, etat: menu('etat', b.etat), valeur: b.etat },
       { cle: 'couleurs', nom: LIBELLES.couleurs, etat: menu('couleurs', b.couleurs), valeur: (b.couleurs || []).join(', ') },
@@ -1090,9 +1207,11 @@
     if (L.reessai && L.reessai.cle === L.cle) return;   // un nouvel essai est déjà programmé
     if (reprendreSiBesoin(L)) return;                  // une analyse déjà envoyée est reprise, jamais relancée
     annulerMinuteur(L);
+    if (fondBlancEnAttente(L)) return;                 // les versions sur fond blanc arrivent : une seule analyse, après
     if (!reglages.autoGenerer || !L.photos.length || L.enChargement) return;
     if (L.ignoree === L.cle || analysesTentees.has(L.cle) || brouillons.some((b) => b.cle === L.cle)) return;
     const delai = reglages.delaiS * 1000;
+    anticiperCompte();
     L.echeance = Date.now() + delai;
     L.analyse = 'stabilisation';
     etape(L, 'pretes', 'en-cours');
@@ -1210,7 +1329,8 @@
       return;
     }
 
-    const remplirAuto = !manuel && reglages.autoGenerer && reglages.autoRemplir;
+    // Un clic sur « Générer » remplit aussi le formulaire : pas de second clic à faire.
+    const remplirAuto = reglages.autoRemplir && (manuel || reglages.autoGenerer);
     if (remplirAuto && tabId !== null) {
       etape(L, 'remplissage', 'en-cours');
       messageLive(L, 'Annonce générée. Remplissage du formulaire…');
@@ -1346,8 +1466,8 @@
     };
 
     try {
-      const nbRetouches = ameliorerPhotosVinted(L);
-      const images = imagesPourIA(L);
+      const nbRetouches = reglages.autoAmeliorer ? ameliorerPhotosVinted(L) : 0;
+      const images = await imagesPourIA(L);
       etape(L, 'pretes', 'fait');
       if (interrompu()) { sortirInterrompu(false); return; }
 
@@ -1409,8 +1529,9 @@
       }
       L.analyse = 'terminee';
       etape(L, 'analyse', 'fait');
-      await constaterCredit(L, moteur.moteur, creditsAvant, false);
+      const constat = constaterCredit(L, moteur.moteur, creditsAvant, false).then(() => majLive(L));
       await terminerAnalyse(L, annonce, { cle: cle, tabId: tabId, nbImages: images.length, precisions: precisions, manuel: manuel, interrompue: ctl.annule });
+      await constat;
     } catch (e) {
       console.error('[AF] Erreur traitement :', e);
       L.analyse = 'echec';
@@ -1465,6 +1586,12 @@
 
   // Remplacement d'une saisie existante : uniquement après confirmation explicite, champ par champ
   $('#live-champs').addEventListener('click', async (e) => {
+    const lien = e.target.closest ? e.target.closest('button.lien-similaires') : null;
+    if (lien) {
+      const url = lien.getAttribute('data-url');
+      if (url && chrome.tabs && chrome.tabs.create) chrome.tabs.create({ url: url, active: true });
+      return;
+    }
     const bouton = e.target.closest ? e.target.closest('.btn-remplacer') : null;
     const L = live;
     if (!bouton || !L.brouillon || L.tabId === null) return;
@@ -2011,32 +2138,54 @@
   }
 
   // ========== RÉGLAGES ET COMPTE ==========
-  const bornerDelai = (v) => Math.max(3, Math.min(60, parseInt(v, 10) || DELAI_DEFAUT_S));
+  const bornerDelai = (v) => Math.max(1, Math.min(60, parseInt(v, 10) || DELAI_DEFAUT_S));
+
+  const CLES_PHOTO = ['photoFond', 'photoRedresser', 'photoOriginales', 'photoCouverture'];
 
   async function chargerReglages() {
     const d = await lire([
       'backendUrl', 'backendEmail', 'style', 'hashtags', 'signature', 'prixAjustement', 'prixArrondi', 'apiKey',
-      'autoGenerer', 'autoRemplir', 'limiteAuto', 'consentementIA', 'claudeExplicite', 'delaiStabilisation'
+      'autoGenerer', 'autoRemplir', 'limiteAuto', 'consentementIA', 'claudeExplicite', 'delaiStabilisation', 'autoAmeliorer',
+      'photoFond', 'photoRedresser', 'photoOriginales', 'photoCouverture'
     ]);
+    const autoJamaisRegle = d.autoGenerer == null && d.consentementIA == null;
+    const formule = (typeof d.signature === 'string' && d.signature.trim()) ? d.signature.trim() : IA.FORMULE_EXPEDITION;
     reglages = {
-      autoGenerer: !!d.autoGenerer && !!d.consentementIA,
+      autoGenerer: autoJamaisRegle ? true : (!!d.autoGenerer && !!d.consentementIA),
       autoRemplir: d.autoRemplir !== false,
       limiteAuto: Math.max(1, Math.min(100, parseInt(d.limiteAuto, 10) || 10)),
-      consentementIA: !!d.consentementIA,
+      consentementIA: autoJamaisRegle ? true : !!d.consentementIA,
       claudeExplicite: !!d.claudeExplicite,
-      delaiS: bornerDelai(d.delaiStabilisation)
+      autoAmeliorer: d.autoAmeliorer === true,
+      delaiS: bornerDelai(d.delaiStabilisation),
+      photoFond: d.photoFond === true && d.photoFondChoisi === true,
+      photoAuto: false,
+      photoRedresser: d.photoRedresser !== false,
+      photoOriginales: d.photoOriginales !== false,
+      photoCouverture: d.photoCouverture === true
     };
     $('#backendUrl').value = d.backendUrl || IA.API_OFFICIELLE || '';
     $('#email').value = d.backendEmail || '';
     $('#style').value = d.style || 'normal';
     $('#hashtags').checked = d.hashtags !== false;
-    $('#signature').value = d.signature || '';
+    $('#signature').value = formule;
+    if (autoJamaisRegle || d.signature == null || !String(d.signature).trim()) {
+      const memoire = {};
+      if (autoJamaisRegle) {
+        memoire.autoGenerer = true;
+        memoire.consentementIA = true;
+      }
+      if (d.signature == null || !String(d.signature).trim()) memoire.signature = formule;
+      chrome.storage.local.set(memoire);
+    }
     $('#prixAjustement').value = d.prixAjustement || 0;
     $('#prixArrondi').value = d.prixArrondi || 1;
     $('#apiKey').value = d.apiKey || '';
     $('#autoGenerer').checked = reglages.autoGenerer;
     majAffichageAuto();
     $('#autoRemplir').checked = reglages.autoRemplir;
+    $('#autoAmeliorer').checked = reglages.autoAmeliorer;
+    for (const cle of CLES_PHOTO) $('#' + cle).checked = reglages[cle];
     $('#limiteAuto').value = reglages.limiteAuto;
     $('#delaiStabilisation').value = reglages.delaiS;
     $('#claudeExplicite').checked = reglages.claudeExplicite;
@@ -2152,6 +2301,8 @@
 
   $('#sauvegarder').addEventListener('click', async () => {
     reglages.autoRemplir = $('#autoRemplir').checked;
+    reglages.autoAmeliorer = $('#autoAmeliorer').checked;
+    for (const cle of CLES_PHOTO) reglages[cle] = $('#' + cle).checked;
     reglages.limiteAuto = Math.max(1, Math.min(100, parseInt($('#limiteAuto').value, 10) || 10));
     reglages.delaiS = bornerDelai($('#delaiStabilisation').value);
     reglages.claudeExplicite = $('#claudeExplicite').checked;
@@ -2163,6 +2314,13 @@
       prixArrondi: parseInt($('#prixArrondi').value, 10) || 1,
       apiKey: $('#apiKey').value.trim(),
       autoRemplir: reglages.autoRemplir,
+      autoAmeliorer: reglages.autoAmeliorer,
+      photoFond: reglages.photoFond,
+      photoFondChoisi: true,
+      photoAuto: false,
+      photoRedresser: reglages.photoRedresser,
+      photoOriginales: reglages.photoOriginales,
+      photoCouverture: reglages.photoCouverture,
       limiteAuto: reglages.limiteAuto,
       delaiStabilisation: reglages.delaiS,
       claudeExplicite: reglages.claudeExplicite
@@ -2186,14 +2344,14 @@
       const limite = Math.max(1, Math.min(100, parseInt($('#limiteAuto').value, 10) || reglages.limiteAuto || 10));
       const delai = bornerDelai($('#delaiStabilisation').value);
       const cout = creditsIllimites()
-        ? '• Ce compte n\'a pas de quota de crédits, mais chaque analyse a un coût réel côté OpenAI (plafonné par le serveur)\n'
+        ? '• Compte de test : analyses automatiques illimitées, sans quota de crédits\n'
         : '• Chaque analyse consomme des crédits\n';
       const accord = confirm(
         'Mode automatique\n\n' +
         'Quand les photos de ton formulaire Vinted ne changent plus pendant ' + delai + ' s, Annonce Futée les ENVOIE ' +
         'à notre service d\'IA (OpenAI via ton serveur Annonce Futée) pour rédiger l\'annonce, une seule fois par ensemble de photos.\n\n' +
         cout +
-        '• Maximum ' + limite + ' analyses automatiques par jour\n' +
+        (creditsIllimites() ? '' : '• Maximum ' + limite + ' analyses automatiques par jour\n') +
         '• Tu peux interrompre à tout moment depuis le panneau, et désactiver ce mode quand tu veux\n' +
         '• Tes saisies manuelles ne sont jamais écrasées sans ta confirmation\n' +
         '• Rien n\'est jamais publié automatiquement\n\nActiver ?');
@@ -2225,6 +2383,388 @@
     reglages.autoRemplir = e.target.checked;
     await chrome.storage.local.set({ autoRemplir: reglages.autoRemplir });
   });
+
+  // ========== PRÉSENTATION DES PHOTOS (fond blanc, redressement, ajout au formulaire) ==========
+  const Detourage = globalThis.AnnonceFuteeDetourage || null;
+  const MAX_DEPOT = 10;
+  const depot = { enCours: false, elements: [], message: '', erreur: false, choix: 0 };
+
+  function rendreDepot() {
+    if (depot.choix >= depot.elements.length || !sourcePhotoIA(depot.choix)) {
+      depot.choix = Math.max(0, depot.elements.findIndex((el) => el.avant));
+    }
+    poser($('#depot-liste'), depot.elements.map((el, i) => {
+      const image = el.apres || el.avant || el.vue;
+      return '<figure class="depot-photo' + (el.etat === 'en-cours' ? ' en-cours' : '') +
+        (i === depot.choix && el.avant ? ' choisie' : '') + (el.avant ? ' cliquable' : '') + '" data-i="' + i + '">' +
+        (image ? '<img src="' + image + '" alt="">' : '<span class="depot-vide"></span>') +
+        '<figcaption>' + escapeHtml(el.note) + '</figcaption></figure>';
+    }).join(''));
+    rendrePhotoIA();
+    const msg = $('#depot-message');
+    msg.hidden = !depot.message;
+    msg.textContent = depot.message;
+    msg.className = 'depot-message' + (depot.erreur ? ' erreur' : '');
+    $('#depot-zone').disabled = depot.enCours;
+    const demandeFond = $('#fond-blanc-demande');
+    if (demandeFond) demandeFond.disabled = depot.enCours;
+    const aEnregistrer = depot.elements.some((el) => el.avant || el.apres);
+    $('#depot-enregistrer').hidden = depot.enCours || !aEnregistrer || (!depot.erreur && !depot.elements.some((el) => el.apres));
+  }
+
+  function direDepot(texte, erreur = false) {
+    depot.message = texte;
+    depot.erreur = erreur;
+    rendreDepot();
+  }
+
+  function listeDepot() {
+    const origines = depot.elements.map((el) => el.avant).filter(Boolean);
+    const blanches = depot.elements.map((el) => el.apres).filter(Boolean);
+    if (!blanches.length) return origines;
+    if (!reglages.photoOriginales) return depot.elements.map((el) => el.apres || el.avant).filter(Boolean);
+    return reglages.photoCouverture ? blanches.concat(origines) : origines.concat(blanches);
+  }
+
+  async function presenterEtEnvoyer(fichiers) {
+    if (depot.enCours) return;
+    const images = Array.from(fichiers || []).filter((f) => f && /^image\//.test(f.type || ''));
+    if (!images.length) return;
+    if (!Detourage) { direDepot('Préparation des photos indisponible. Recharge l\'extension.', true); return; }
+    const tab = await ongletActifVinted();
+    if (!tab) { direDepot('Ouvre d\'abord « Vendre un article » sur Vinted, puis dépose tes photos.', true); return; }
+
+    depot.enCours = true;
+    depot.elements = [];
+    direDepot(images.length > MAX_DEPOT ? 'Seules les ' + MAX_DEPOT + ' premières photos sont préparées.' : '');
+    try {
+      for (const fichier of images.slice(0, MAX_DEPOT)) {
+        const el = { etat: 'en-cours', avant: '', apres: '', note: 'Préparation…' };
+        depot.elements.push(el);
+        rendreDepot();
+        let bitmap = null;
+        try {
+          bitmap = await createImageBitmap(fichier, { imageOrientation: 'from-image' });
+          el.avant = Detourage.originale(bitmap).toDataURL('image/jpeg', 0.9);
+          el.note = 'Photo d\'origine';
+          if (reglages.photoFond !== false) {
+            const rendu = await Detourage.presenter(bitmap, { redresser: reglages.photoRedresser !== false });
+            if (rendu && rendu.ok && rendu.canvas) {
+              el.apres = rendu.canvas.toDataURL('image/jpeg', 0.9);
+              el.note = rendu.angle ? 'Origine et fond blanc, redressée' : 'Origine et fond blanc';
+            }
+          }
+        } catch (e) {
+          console.warn('[AF] Préparation de photo :', e);
+          el.note = el.avant ? 'Gardée telle quelle : détourage impossible' : 'Photo illisible, ignorée';
+        } finally {
+          if (bitmap && bitmap.close) bitmap.close();
+        }
+        el.etat = 'pret';
+        rendreDepot();
+      }
+
+      const liste = listeDepot();
+      if (!liste.length) { direDepot('Aucune photo lisible.', true); return; }
+      const uniques = depot.elements.filter((el) => el.avant).length;
+      const rep = await versOnglet(tab.id, {
+        type: 'addPhotos',
+        images: liste.map((url, i) => ({ b64: url.split(',')[1], nom: 'photo-' + (i + 1) + '.jpg' }))
+      });
+      if (!rep || !rep.ok) {
+        direDepot(((rep && rep.error) || 'Impossible de joindre la page Vinted. Actualise-la (F5).') +
+          ' Tes photos sont prêtes : enregistre-les puis ajoute-les à la main.', true);
+        return;
+      }
+      livePour(tab.id).depot = { total: rep.nb, uniques: Math.min(uniques, rep.nb) };
+      const B = etatBlanc(tab.id);
+      for (const el of depot.elements) {
+        if (!el.apres) continue;
+        const blanche = await signatureVisuelle(el.apres.split(',')[1]);
+        const origine = el.avant ? await signatureVisuelle(el.avant.split(',')[1]) : '';
+        if (blanche) B.resultats.push(blanche);
+        if (origine) B.resultats.push(origine);
+        const doublon = reglages.photoOriginales === false ? '' : (reglages.photoCouverture ? origine : blanche);
+        if (doublon) B.doublons.push(doublon);
+      }
+      B.jusqua = Date.now() + DELAI_APPARITION_MS;
+      setTimeout(reprogrammerAutomatique, DELAI_APPARITION_MS + 100);
+      direDepot(rep.nb + ' photo' + (rep.nb > 1 ? 's ajoutées' : ' ajoutée') + ' au formulaire Vinted.');
+    } finally {
+      depot.enCours = false;
+      rendreDepot();
+    }
+  }
+
+  // ----- Photos IA (studio, portée) : image recréée par le serveur, à la demande et payante -----
+  const LIBELLES_IA = {
+    studio: 'studio', mannequin_femme: 'portée femme', mannequin_homme: 'portée homme',
+    enfant: 'enfant', bebe: 'bébé', chien: 'chien', chat: 'chat', objet: 'fond objet', fond_blanc: 'fond blanc'
+  };
+  const COTE_SOURCE_IA = 1280;
+
+  function sourcePhotoIA(i) {
+    const el = depot.elements[i];
+    return el && el.avant ? el.avant : '';
+  }
+
+  function coutPhotoIA() {
+    const c = compte.credits && Number(compte.credits.photo_cost);
+    return c > 0 ? c : null;
+  }
+
+  function rendrePhotoIA() {
+    const bloc = $('#photo-ia');
+    const dispo = depot.elements.some((el) => el.avant);
+    bloc.hidden = !dispo;
+    if (!dispo) return;
+    const cout = coutPhotoIA();
+    const credits = cout ? cout + ' crédits' : 'des crédits';
+    $('#photo-ia-cout').textContent = '· utilise ' + credits;
+    $('#photo-ia-aide').textContent = compte.connected
+      ? 'Chaque image est recréée par l\'IA et utilise ' + credits + ', puis elle est ajoutée dans Vinted. Vérifie qu\'elle reste fidèle à l\'article. Enfant et bébé : le visage est créé par l\'IA, ce n\'est pas une vraie personne.'
+      : 'Connecte-toi à ton compte dans Réglages. Chaque image utilise ' + credits + '.';
+    bloc.querySelectorAll('button[data-mode]').forEach((b) => { b.disabled = depot.enCours || !compte.connected; });
+  }
+
+  async function reduireJpeg(url, cote) {
+    const image = await chargerImage(url);
+    const ratio = Math.min(1, cote / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round((image.naturalWidth || image.width) * ratio));
+    c.height = Math.max(1, Math.round((image.naturalHeight || image.height) * ratio));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(image, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+  }
+
+  // L'appel part du panneau : une image peut demander plus de 30 secondes, durée au-delà de laquelle
+  // Chrome arrête le service de fond d'une extension.
+  function textePhotoIA(json, status) {
+    const code = json && typeof json.code === 'string' ? json.code : '';
+    if (code === 'cost_ceiling') return 'Limite du jour atteinte. La photo n\'a pas été créée. Réessayez demain.';
+    if (code === 'photo_refused') return 'L\'IA a refusé cette photo. Choisissez un autre mode.';
+    if (code === 'photo_in_progress') return 'Une photo IA est déjà en cours.';
+    const texte = json && json.message ? String(json.message).replace(/\s+/g, ' ').trim().slice(0, 180) : '';
+    return texte || ('Le serveur n\'a pas pu créer la photo (' + status + ').');
+  }
+
+  async function demanderPhotoIA(b64, mode) {
+    const d = await chrome.storage.local.get(['backendUrl', 'backendToken']);
+    if (!d.backendToken) throw new Error('Connecte-toi à ton compte dans Réglages pour créer des photos IA.');
+    const url = IA.urlApi(d.backendUrl || IA.API_OFFICIELLE, '/api/v1/photos/enhance');
+    let reponse;
+    try {
+      reponse = await fetch(url, {
+        method: 'POST',
+        credentials: 'omit',
+        redirect: 'error',
+        signal: AbortSignal.timeout(170000),
+        headers: { 'content-type': 'application/json', accept: 'application/json', authorization: 'Bearer ' + d.backendToken },
+        body: JSON.stringify({ image: b64, mode: mode })
+      });
+    } catch (e) {
+      throw new Error(e && e.name === 'TimeoutError'
+        ? 'Le serveur n\'a pas répondu à temps. Vérifie tes crédits avant de réessayer.'
+        : 'Connexion impossible au serveur.');
+    }
+    let json = null;
+    try { json = await reponse.json(); } catch (e) { json = null; }
+    if (reponse.status === 401) throw new Error('Session expirée. Reconnecte-toi dans Réglages.');
+    if (reponse.status === 404) throw new Error('Ce serveur ne propose pas encore les photos IA : il doit être mis à jour.');
+    if (!reponse.ok || !json || !json.data || typeof json.data.image !== 'string') {
+      throw new Error(textePhotoIA(json, reponse.status));
+    }
+    if (!/^[A-Za-z0-9+/=]+$/.test(json.data.image)) throw new Error('Image reçue illisible.');
+    return json.data.image;
+  }
+
+  async function lancerPhotoIA(mode) {
+    if (depot.enCours || !LIBELLES_IA[mode]) return;
+    const source = sourcePhotoIA(depot.choix);
+    if (!source) return;
+    if (!compte.connected) { direDepot('Connecte-toi à ton compte dans Réglages pour créer des photos IA.', true); return; }
+    const tab = await ongletActifVinted();
+    if (!tab) { direDepot('Ouvre d\'abord « Vendre un article » sur Vinted.', true); return; }
+
+    depot.enCours = true;
+    const el = { etat: 'en-cours', avant: '', apres: '', vue: source, note: 'Photo IA en cours, jusqu\'à une minute…', ia: true };
+    depot.elements.push(el);
+    direDepot('');
+    try {
+      const image = await demanderPhotoIA(await reduireJpeg(source, COTE_SOURCE_IA), mode);
+      el.apres = 'data:image/jpeg;base64,' + image;
+      el.etat = 'pret';
+      el.note = 'Photo IA, ' + LIBELLES_IA[mode];
+      rendreDepot();
+      const ajout = await versOnglet(tab.id, { type: 'addPhotos', images: [{ b64: image, nom: 'photo-ia-' + mode + '.jpg' }] });
+      if (ajout && ajout.ok) {
+        const B = etatBlanc(tab.id);
+        B.attente += ajout.nb;
+        B.jusqua = Date.now() + DELAI_APPARITION_MS;
+        setTimeout(reprogrammerAutomatique, DELAI_APPARITION_MS + 100);
+        direDepot('Photo IA ajoutée au formulaire Vinted. Vérifie qu\'elle est fidèle à l\'article et précise dans ta description que c\'est une image générée.');
+      } else {
+        direDepot(((ajout && ajout.error) || 'Impossible de joindre la page Vinted.') + ' La photo IA est prête : enregistre-la puis ajoute-la à la main.', true);
+      }
+    } catch (e) {
+      el.etat = 'echec';
+      el.note = e && e.message ? e.message : 'Photo IA impossible.';
+      direDepot(el.note, true);
+    } finally {
+      depot.enCours = false;
+      rendreDepot();
+      actualiserCompte().then(rendrePhotoIA, () => {});
+    }
+  }
+
+  $('#photo-ia').addEventListener('click', (e) => {
+    const bouton = e.target.closest ? e.target.closest('button[data-mode]') : null;
+    if (bouton && !bouton.disabled) garder('Photo IA', () => lancerPhotoIA(bouton.dataset.mode));
+  });
+  $('#depot-liste').addEventListener('click', (e) => {
+    const figure = e.target.closest ? e.target.closest('.depot-photo.cliquable') : null;
+    if (!figure || depot.enCours) return;
+    depot.choix = Number(figure.dataset.i) || 0;
+    rendreDepot();
+  });
+
+  // ----- Photos ajoutées directement dans le formulaire Vinted -----
+  // Chaque nouvelle photo du formulaire reçoit sa version sur fond blanc, ajoutée à la suite.
+  // Les versions ajoutées par l'extension sont reconnues à leur retour : elles ne sont jamais retraitées.
+  async function fondBlancAuto(L, tab) {
+    if (!L.photos.length) { direDepot('Ajoute d\'abord une photo.', true); return; }
+    const B = etatBlanc(tab.id);
+    if (!B.resultats) B.resultats = [];
+    if (B.enCours || depot.enCours) { direDepot('Un détourage est déjà en cours.', true); return; }
+    if (!Detourage) { direDepot('Détourage indisponible. Recharge l\'extension.', true); return; }
+    if (!/\/items\/(new|\d+\/edit)/.test(tab.url || '')) {
+      direDepot('Ouvre la page Vinted « Vendre un article ».', true);
+      return;
+    }
+
+    const photos = L.photos.slice();
+    const signatures = new Map();
+    const aTraiter = [];
+    for (const p of photos) {
+      if (B.generees.has(p.fp)) continue;
+      const s = await signatureVisuelle(p.b64);
+      signatures.set(p, s);
+      if (B.resultats.some((v) => distanceSignature(v, s) <= SEUIL_MEME_PHOTO)) continue;
+      aTraiter.push(p);
+    }
+    if (!aTraiter.length) {
+      direDepot('Ces photos ont déjà un fond blanc.', true);
+      afficherStatut('Ces photos ont déjà un fond blanc.', 'info');
+      return;
+    }
+    B.enCours = true;
+    annulerMinuteur(L);
+    depot.enCours = true;
+    depot.elements = [];
+    direDepot('Détourage en cours…');
+    try {
+      // Les photos sont relues en meilleure définition que pour l'analyse.
+      let nettes = null;
+      const rep = await versOnglet(tab.id, { type: 'collectPhotos', cote: Detourage.COTE_MAX });
+      if (rep && rep.ok && Array.isArray(rep.images) && rep.images.length === photos.length) nettes = rep.images;
+
+      const blanches = [];
+      for (const p of aTraiter) {
+        const el = { etat: 'en-cours', avant: 'data:image/jpeg;base64,' + p.b64, apres: '', note: 'Préparation…' };
+        depot.elements.push(el);
+        rendreDepot();
+        try {
+          const b64 = nettes ? nettes[photos.indexOf(p)] : p.b64;
+          const image = await chargerImage('data:image/jpeg;base64,' + b64);
+          const res = await Detourage.presenter(image, { redresser: reglages.photoRedresser });
+          if (res.ok) {
+            el.apres = res.canvas.toDataURL('image/jpeg', 0.9);
+            el.note = res.angle ? 'Fond blanc, redressée' : 'Fond blanc';
+            const signature = await signatureVisuelle(el.apres.split(',')[1]);
+            if (signature) B.resultats.push(signature);
+            B.generees.add(p.fp);
+            blanches.push(el.apres);
+          } else {
+            el.note = 'Gardée telle quelle : ' + res.raison;
+          }
+        } catch (e) {
+          console.warn('[AF] Fond blanc :', e);
+          el.note = 'Gardée telle quelle : détourage impossible';
+        }
+        el.etat = 'pret';
+        rendreDepot();
+      }
+
+      if (blanches.length) {
+        const ajout = await versOnglet(tab.id, {
+          type: 'addPhotos',
+          images: blanches.map((url, i) => ({ b64: url.split(',')[1], nom: 'fond-blanc-' + (i + 1) + '.jpg' }))
+        });
+        if (ajout && ajout.ok) {
+          const nb = Number(ajout.nb) || blanches.length;
+          B.attente += nb;
+          B.plafond = Math.max(B.plafond || 0, photos.length + nb);
+          B.jusqua = Date.now() + DELAI_APPARITION_MS;
+          setTimeout(reprogrammerAutomatique, DELAI_APPARITION_MS + 100);
+          const texte = nb + (nb > 1 ? ' versions sur fond blanc ajoutées' : ' version sur fond blanc ajoutée') + ' au formulaire Vinted.';
+          direDepot(texte);
+          afficherStatut(texte, 'succes');
+        } else {
+          const texte = ((ajout && ajout.error) || 'Impossible de joindre la page Vinted.') +
+            ' Les versions sur fond blanc sont prêtes : enregistre-les puis ajoute-les à la main.';
+          direDepot(texte, true);
+          afficherStatut(texte, 'erreur');
+        }
+      } else {
+        direDepot('Le détourage n\'a pas pu isoler l\'article.', true);
+        afficherStatut('Le détourage n\'a pas pu isoler l\'article.', 'erreur');
+      }
+    } finally {
+      B.enCours = false;
+      depot.enCours = false;
+      rendreDepot();
+      if (B.aRefaire) { B.aRefaire = false; synchroniser(true); }
+      reprogrammerAutomatique();
+    }
+  }
+
+  $('#fond-blanc-demande').addEventListener('click', () => garder('Fond blanc', () => {
+    if (!sourcePhotoIA(depot.choix)) {
+      direDepot('Dépose une photo ici, puis clique dessus pour la choisir.', true);
+      afficherStatut('Choisis d\'abord une photo dans le panneau.', 'erreur');
+      return;
+    }
+    return lancerPhotoIA('fond_blanc');
+  }));
+  $('#depot-zone').addEventListener('click', () => $('#depot-fichiers').click());
+  $('#depot-fichiers').addEventListener('change', (e) => garder('Photos', () => {
+    const fichiers = Array.from(e.target.files || []);
+    e.target.value = '';
+    return presenterEtEnvoyer(fichiers);
+  }));
+  ['dragenter', 'dragover'].forEach((type) => $('#depot').addEventListener(type, (e) => {
+    e.preventDefault();
+    $('#depot-zone').classList.add('survol');
+  }));
+  ['dragleave', 'drop'].forEach((type) => $('#depot').addEventListener(type, (e) => {
+    e.preventDefault();
+    $('#depot-zone').classList.remove('survol');
+  }));
+  $('#depot').addEventListener('drop', (e) => garder('Photos', () =>
+    presenterEtEnvoyer(e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [])));
+  $('#depot-enregistrer').addEventListener('click', () => {
+    listeDepot().forEach((url, i) => {
+      const lien = document.createElement('a');
+      lien.href = url;
+      lien.download = 'annonce-photo-' + (i + 1) + '.jpg';
+      lien.click();
+    });
+  });
+  // Le modèle est préparé à l'ouverture du panneau : la première photo n'attend pas son chargement.
+  if (Detourage && Detourage.disponible()) setTimeout(() => { Detourage.charger().catch(() => {}); }, 600);
 
   // ========== DÉMARRAGE ==========
   try { $('#version').textContent = chrome.runtime.getManifest().version; } catch (e) { /* version inconnue */ }

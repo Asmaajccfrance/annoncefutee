@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Annonce Futée</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="entete">
+    <img src="images/icon-96.png" alt="Annonce Futée" class="icone">
+    <div>
+      <h1>Annonce Futée</h1>
+      <p id="credits-badge" class="sous">Extension Firefox Android &amp; PC</p>
+    </div>
+  </header>
+
+  <section id="zone-annonce" class="bloc lavande" hidden>
+    <div class="ligne-titre">
+      <strong id="annonce-titre">Sans titre</strong>
+      <span id="annonce-prix" class="prix">-- €</span>
+    </div>
+    <p id="annonce-desc" class="desc"></p>
+    <button id="btn-preremplir" type="button" class="btn primaire">
+      Autocompléter sur Vinted
+    </button>
+    <button id="btn-effacer-annonce" type="button" class="btn lien">
+      Effacer cette annonce
+    </button>
+  </section>
+
+  <section id="zone-connexion" class="bloc" hidden>
+    <p class="aide">Lance depuis l'application Android Annonce Futée pour autocompléter sans te reconnecter, ou connecte-toi ici pour analyser directement dans Firefox.</p>
+    <input id="email" type="email" placeholder="E-mail" autocomplete="email">
+    <input id="password" type="password" placeholder="Mot de passe" autocomplete="current-password">
+    <button id="btn-connexion" type="button" class="btn primaire">Se connecter</button>
+  </section>
+
+  <section id="zone-connecte" class="bloc" hidden>
+    <input id="precisions" type="text" maxlength="300" placeholder="Précisions facultatives (taille, défaut…)">
+    <button id="btn-analyser" type="button" class="btn contour">
+      Analyser les photos de la page (1 cr.)
+    </button>
+    <button id="btn-deconnexion" type="button" class="btn lien">Déconnexion</button>
+  </section>
+
+  <p id="statut" class="statut" hidden></p>
+  <footer class="pied">Application indépendante, non affiliée à Vinted.</footer>
+  <script src="popup.js"></script>
+</body>
+</html>

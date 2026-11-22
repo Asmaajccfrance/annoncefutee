@@ -68,6 +68,7 @@ function creerPanneau(options = {}) {
     appelsGenerer: 0,
     requetes: [],
     appelsRemplir: [],
+    appelsPhotos: [],
     annulations: [],
     resultats: options.resultats || {},
     enAttente: null,
@@ -171,7 +172,11 @@ function creerPanneau(options = {}) {
           const fait = msg.seulement
             ? Object.fromEntries(msg.seulement.map((c) => [c, 'rempli']))
             : (options.fait || { titre: 'rempli', description: 'rempli', prix: 'echec' });
-          return { ok: true, fait: fait, menus: msg.seulement ? {} : { etat: 'rempli', taille: 'a_choisir', couleurs: 'deja' } };
+          return { ok: true, fait: fait, menus: msg.seulement ? {} : { etat: 'rempli', taille: 'a_choisir', couleurs: 'deja', marque: 'rempli' } };
+        }
+        if (msg.type === 'addPhotos') {
+          serveur.appelsPhotos.push(msg);
+          return options.addPhotos || { ok: true, nb: (msg.images || []).length };
         }
         return { ok: true };
       }

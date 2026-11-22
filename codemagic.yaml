@@ -1,0 +1,58 @@
+# Codemagic : compile l'app iPhone (Flutter) sur un Mac dans le cloud et l'envoie sur TestFlight.
+# À placer à la racine du dépôt Git. Le projet Flutter est dans le dossier `mobile/`.
+#
+# AVANT LE PREMIER BUILD (une seule fois) :
+#  1. Compte Apple Developer actif (99 €/an).
+#  2. Dans Codemagic : Teams > Integrations > App Store Connect > ajouter une clé API,
+#     et la nommer exactement comme `app_store_connect` ci-dessous (ou changer le nom ici).
+#  3. Dans App Store Connect : créer l'app avec le Bundle ID fr.annoncefutee.annonceFutee.
+#  4. Dans developer.apple.com : créer l'App Group `group.fr.annoncefutee.partage`
+#     et l'activer sur l'identifiant de l'app.
+#
+# QUAND L'EXTENSION SAFARI SERA AJOUTÉE AU PROJET XCODE :
+#  - créer aussi l'identifiant fr.annoncefutee.annonceFutee.SafariExtension (même App Group),
+#  - ajouter ce bundle ID dans `ios_signing > bundle_identifiers` à la place de `bundle_identifier`.
+
+workflows:
+  ios-testflight:
+    name: Annonce Futée - iOS (TestFlight)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: app_store_connect
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: fr.annoncefutee.annonceFutee
+      vars:
+        BUNDLE_ID: fr.annoncefutee.annonceFutee
+    scripts:
+      - name: Installer les dépendances Flutter
+        working_directory: mobile
+        script: |
+          flutter pub get
+      - name: Installer les pods
+        working_directory: mobile/ios
+        script: |
+          pod install
+      - name: Appliquer les profils de signature
+        working_directory: mobile
+        script: |
+          xcode-project use-profiles --project ios/Runner.xcodeproj
+      - name: Compiler l'IPA
+        working_directory: mobile
+        script: |
+          flutter build ipa --release \
+            --build-name=1.0.0 \
+            --build-number=$(($(date +%s) / 60)) \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - mobile/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

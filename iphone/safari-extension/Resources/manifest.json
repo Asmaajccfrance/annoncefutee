@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Annonce Futée",
+  "description": "Pré-remplit le titre, la description et le prix de ton annonce sur Vinted dans Safari iPhone. Tu vérifies et tu publies toi-même.",
+  "version": "1.0.0",
+  "icons": {
+    "48": "images/icon-48.png",
+    "96": "images/icon-96.png",
+    "128": "images/icon-128.png"
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "images/icon-48.png",
+      "96": "images/icon-96.png",
+      "128": "images/icon-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "js": ["content.js"],
+      "matches": [
+        "https://www.vinted.fr/*",
+        "https://vinted.fr/*"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://www.vinted.fr/*",
+    "https://vinted.fr/*",
+    "https://*.vinted.net/*",
+    "https://annoncefutee.fr/*"
+  ]
+}

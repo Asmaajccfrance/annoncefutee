@@ -23,6 +23,7 @@ class CreditLedger
                 'remaining' => null,
                 'unlimited' => true,
                 'analysis_cost' => $this->analysisCost($user),
+                'photo_cost' => $this->photoCost($user),
                 'spend' => $this->spendSummary($user),
             ];
         }
@@ -35,6 +36,7 @@ class CreditLedger
             'remaining' => max(0, $monthly - $used),
             'unlimited' => false,
             'analysis_cost' => $this->analysisCost($user),
+            'photo_cost' => $this->photoCost($user),
         ];
     }
 
@@ -62,6 +64,7 @@ class CreditLedger
             ->where('user_id', $user->id)
             ->where('created_at', '>=', now()->startOfMonth())
             ->where('status', 'succeeded')
+            ->where('operation', 'listing.analyze')
             ->count();
 
         return [
@@ -93,6 +96,11 @@ class CreditLedger
         return max(1, (int) config('credits.analysis_cost'));
     }
 
+    public function photoCost(User $user): int
+    {
+        return max(1, (int) config('credits.photo_cost'));
+    }
+
     public function usedThisMonth(User $user): int
     {
         return (int) UsageEvent::query()
@@ -101,17 +109,23 @@ class CreditLedger
             ->sum('credits_charged');
     }
 
-    public function reserve(User $user, int $cost): UsageEvent
+    /**
+     * @param  string  $operation  listing.analyze ou photo.enhance : une seule demande à la fois par type d'opération
+     * @param  int|null  $hold  montant provisoire retenu pour les plafonds (par défaut celui d'une analyse)
+     */
+    public function reserve(User $user, int $cost, string $operation = 'listing.analyze', ?int $hold = null): UsageEvent
     {
-        return DB::transaction(function () use ($user, $cost) {
+        return DB::transaction(function () use ($user, $cost, $operation, $hold) {
             $this->lockGuard();
             User::query()->whereKey($user->id)->lockForUpdate()->first();
             $this->expireStale($user);
 
-            $stats = $this->userStats($user);
+            $stats = $this->userStats($user, $operation);
             $inflightLimit = max(1, (int) config('credits.max_inflight'));
             if ($stats['inflight'] >= $inflightLimit) {
-                throw new ApiException('analysis_in_progress', 'Une analyse est déjà en cours.', 429);
+                throw $operation === 'listing.analyze'
+                    ? new ApiException('analysis_in_progress', 'Une analyse est déjà en cours.', 429)
+                    : new ApiException('photo_in_progress', 'Une photo IA est déjà en cours.', 429);
             }
 
             // Pas de quota pour un compte de test ; tout le reste (une analyse à la fois, plafonds de coût) s'applique.
@@ -119,19 +133,21 @@ class CreditLedger
                 throw new ApiException('credits_exhausted', 'Quota mensuel atteint.', 429);
             }
 
-            $hold = max(0, (int) config('credits.reservation_hold_micros'));
+            $hold = $hold ?? max(0, (int) config('credits.reservation_hold_micros'));
             $globalSpent = (int) DB::table('usage_events')
                 ->where('created_at', '>=', now()->startOfDay())
                 ->sum('estimated_cost_micros');
             $userCap = (int) round(((float) config('credits.daily_user_cost_usd')) * 1_000_000);
             $globalCap = (int) round(((float) config('credits.daily_global_cost_usd')) * 1_000_000);
-            if ($stats['spent_today'] + $hold >= $userCap || $globalSpent + $hold >= $globalCap) {
+            // Le compte de test n'a pas de plafond personnel : les essais ne s'arrêtent pas dans la journée.
+            $depasseUtilisateur = ! $this->isUnlimited($user) && ($stats['spent_today'] + $hold >= $userCap);
+            if ($depasseUtilisateur || $globalSpent + $hold >= $globalCap) {
                 throw new ApiException('cost_ceiling', 'Limite de coût quotidienne atteinte.', 429);
             }
 
             return UsageEvent::query()->create([
                 'user_id' => $user->id,
-                'operation' => 'listing.analyze',
+                'operation' => $operation,
                 'status' => 'reserved',
                 'credits_charged' => $cost,
                 'estimated_cost_micros' => $hold,
@@ -186,7 +202,7 @@ class CreditLedger
     /**
      * @return array{used_month: int, spent_today: int, inflight: int}
      */
-    private function userStats(User $user): array
+    private function userStats(User $user, string $operation): array
     {
         $row = DB::table('usage_events')
             ->where('user_id', $user->id)
@@ -199,8 +215,8 @@ class CreditLedger
                 [now()->startOfDay()]
             )
             ->selectRaw(
-                'COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) as inflight',
-                ['reserved']
+                'COALESCE(SUM(CASE WHEN status = ? AND operation = ? THEN 1 ELSE 0 END), 0) as inflight',
+                ['reserved', $operation]
             )
             ->first();
 
