@@ -1,0 +1,3 @@
+// Versions alignées sur Flutter (Generated.xcconfig). Les flags Flutter
+// (OTHER_LDFLAGS, etc.) sont neutralisés dans les build settings de la cible.
+#include? "../Flutter/Generated.xcconfig"

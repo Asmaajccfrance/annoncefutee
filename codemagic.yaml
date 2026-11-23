@@ -1,4 +1,4 @@
-# Codemagic : compile l'app iPhone (Flutter) sur un Mac dans le cloud et l'envoie sur TestFlight.
+# Codemagic : compile l'app iPhone (Flutter) + Extension Safari, puis TestFlight.
 # À placer à la racine du dépôt Git. Le projet Flutter est dans le dossier `mobile/`.
 #
 # AVANT LE PREMIER BUILD (une seule fois) :
@@ -6,12 +6,14 @@
 #  2. Dans Codemagic : Teams > Integrations > App Store Connect > ajouter une clé API,
 #     et la nommer exactement comme `app_store_connect` ci-dessous (ou changer le nom ici).
 #  3. Dans App Store Connect : créer l'app avec le Bundle ID fr.annoncefutee.annonceFutee.
-#  4. Dans developer.apple.com : créer l'App Group `group.fr.annoncefutee.partage`
-#     et l'activer sur l'identifiant de l'app.
-#
-# QUAND L'EXTENSION SAFARI SERA AJOUTÉE AU PROJET XCODE :
-#  - créer aussi l'identifiant fr.annoncefutee.annonceFutee.SafariExtension (même App Group),
-#  - ajouter ce bundle ID dans `ios_signing > bundle_identifiers` à la place de `bundle_identifier`.
+#  4. Dans developer.apple.com :
+#     - App Group `group.fr.annoncefutee.partage` activé sur l'app ET sur l'extension
+#     - App ID `fr.annoncefutee.annonceFutee` (App Groups)
+#     - App ID `fr.annoncefutee.annonceFutee.SafariExtension` (App Groups, type App)
+#     - Profils App Store pour les DEUX bundle IDs (même certificat Distribution)
+#  5. Dans Codemagic Code signing : uploader/fetcher les deux profils App Store.
+#     Avec `bundle_identifier: fr.annoncefutee.annonceFutee`, Codemagic inclut aussi
+#     les profils `fr.annoncefutee.annonceFutee.*` (dont SafariExtension).
 
 workflows:
   ios-testflight:
@@ -26,9 +28,11 @@ workflows:
       cocoapods: default
       ios_signing:
         distribution_type: app_store
+        # Principale + extensions (SafariExtension matchée via préfixe .*)
         bundle_identifier: fr.annoncefutee.annonceFutee
       vars:
         BUNDLE_ID: fr.annoncefutee.annonceFutee
+        BUNDLE_ID_SAFARI: fr.annoncefutee.annonceFutee.SafariExtension
     scripts:
       - name: Installer les dépendances Flutter
         working_directory: mobile
@@ -38,10 +42,16 @@ workflows:
         working_directory: mobile/ios
         script: |
           pod install
-      - name: Appliquer les profils de signature
+      - name: Appliquer les profils de signature (app + Safari)
         working_directory: mobile
         script: |
+          set -e
+          echo "Bundle IDs attendus:"
+          echo "  - $BUNDLE_ID"
+          echo "  - $BUNDLE_ID_SAFARI"
           xcode-project use-profiles --project ios/Runner.xcodeproj
+          echo "Cibles Xcode:"
+          xcodebuild -project ios/Runner.xcodeproj -list
       - name: Compiler l'IPA
         working_directory: mobile
         script: |
@@ -49,6 +59,24 @@ workflows:
             --build-name=1.0.0 \
             --build-number=$(($(date +%s) / 60)) \
             --export-options-plist=/Users/builder/export_options.plist
+      - name: Vérifier l'extension Safari dans l'IPA
+        working_directory: mobile
+        script: |
+          set -e
+          IPA=$(ls -1 build/ios/ipa/*.ipa | head -n 1)
+          echo "IPA: $IPA"
+          TMP=$(mktemp -d)
+          unzip -q "$IPA" -d "$TMP"
+          APPEX=$(find "$TMP" -path '*/PlugIns/*.appex' -type d | head -n 1)
+          if [ -z "$APPEX" ]; then
+            echo "ERREUR: aucun .appex dans Runner.app/PlugIns"
+            find "$TMP" -type d -name '*.app' -o -name '*.appex' | head -n 50
+            exit 1
+          fi
+          echo "Extension trouvée: $APPEX"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APPEX/Info.plist"
+          test -f "$APPEX/Resources/manifest.json"
+          echo "manifest.json OK"
     artifacts:
       - mobile/build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log

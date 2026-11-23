@@ -36,9 +36,6 @@ open ios/Runner.xcworkspace
 ```
 
 Dans **Xcode** :
-1. Sur la cible **`Runner`** → onglet *Signing & Capabilities* : sélectionne ton équipe Apple Developer et active la capacité **App Groups** avec `group.fr.annoncefutee.partage` (`Runner.entitlements`).
-2. Pour embarquer l'extension Safari d'autocomplétion dans le même `.ipa` :
-   - *File → New → Target → iOS → Safari Web Extension* (nom : `AnnonceFuteeSafari`, bundle ID : `fr.annoncefutee.annonceFutee.SafariExtension`).
-   - Remplace son dossier `Resources/`, son `Info.plist` et son `SafariWebExtensionHandler.swift` par ceux de `iphone/safari-extension/`.
-   - Active le même **App Group** `group.fr.annoncefutee.partage` (`SafariExtension.entitlements`) sur cette cible.
+1. Sur la cible **`Runner`** → *Signing & Capabilities* : équipe Apple Developer + **App Groups** `group.fr.annoncefutee.partage` (`Runner.entitlements`).
+2. La cible **`AnnonceFuteeSafari`** (`mobile/ios/AnnonceFuteeSafari/`, bundle ID `fr.annoncefutee.annonceFutee.SafariExtension`) est déjà embarquée dans `Runner.app/PlugIns` via *Embed App Extensions*. Même App Group (`SafariExtension.entitlements`). Les sources de référence restent aussi dans `iphone/safari-extension/`.
 3. Sur l'iPhone : *Réglages → Apps → Safari → Extensions → Annonce Futée → Autoriser*.
